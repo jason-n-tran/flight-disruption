@@ -1,0 +1,78 @@
+# Env
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.uv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Data lake + artifacts (only small bundled samples are committed, under data/sample/)
+data/lake/
+data/raw/
+*.duckdb
+*.duckdb.wal
+mlruns/
+mlartifacts/
+*.onnx
+*.txt.model
+*.lgb
+*.pkl
+
+# Re-include the bundled sample artifacts. These negations MUST come AFTER all
+# the exclusion patterns above (last-match-wins in gitignore), otherwise the
+# sample model.lgb / *.onnx / *.duckdb get excluded and the demo image can't
+# load a model on a fresh clone. (This bug shipped once: model.lgb was ignored.)
+!data/sample/
+!data/sample/**
+
+# Spark
+spark-warehouse/
+metastore_db/
+derby.log
+
+# Node / SvelteKit
+node_modules/
+.svelte-kit/
+build/
+.output/
+dist/
+
+# dbt
+dbt/flight/target/
+dbt/flight/dbt_packages/
+dbt/flight/logs/
+
+# Airflow
+airflow/logs/
+airflow/airflow.db
+airflow/airflow.cfg
+airflow/webserver_config.py
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+
+# Probe scratch
+_probe_*.py
+osky_*.json
+om_*.json
+bts_*.zip
+airports.dat
+credentials.json
+debug.log
+
+streaming/kafka_showcase/data/
+# BI export (Power BI/Tableau source files)
+bi_export/

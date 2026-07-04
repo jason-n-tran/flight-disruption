@@ -1,0 +1,9 @@
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.duckdb binary
+*.onnx binary
+*.parquet binary
+*.zip binary
+*.lgb binary
+*.pkl binary
