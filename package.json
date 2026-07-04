@@ -1,0 +1,20 @@
+{
+  "name": "flight-disruption-platform",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Flight Disruption Intelligence Platform — convenience wrappers for the polyglot monorepo (cross-platform: PowerShell / bash / zsh).",
+  "scripts": {
+    "up": "docker compose up -d --build",
+    "up:live": "docker compose --profile live up -d --build",
+    "down": "docker compose down",
+    "logs": "docker compose logs -f",
+    "up:vps": "docker compose -f docker-compose.yml -f infra/docker-compose.vps.yml up -d --build serving",
+    "up:truenas": "docker compose -f docker-compose.yml -f infra/docker-compose.truenas.yml --profile live up -d nats live-stream",
+    "pipeline": "docker compose -f docker-compose.yml -f infra/docker-compose.workingpc.yml --profile pipeline up lake-builder",
+    "sample": "python scripts/generate_sample_artifacts.py",
+    "smoke": "python scripts/smoke_test.py",
+    "test:py": "python scripts/run_all_tests.py",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "dev:serving": "uvicorn flight_serving.app:app --reload --app-dir serving"
+  }
+}
