@@ -190,3 +190,7 @@ class Paths:
 
     def gold_table(self, name: str) -> str:
         return os.path.join(self.gold, name)
+
+
+def paths(lake_root: str | None = None) -> Paths:
+    return Paths(lake_root or os.environ.get("LAKE_ROOT", os.path.abspath("./data/lake")))
