@@ -194,3 +194,22 @@ class Paths:
 
 def paths(lake_root: str | None = None) -> Paths:
     return Paths(lake_root or os.environ.get("LAKE_ROOT", os.path.abspath("./data/lake")))
+
+
+# ---------------------------------------------------------------------------
+# Valkey keyspace — shared instance, `flight:` prefix (see serving stores memory)
+# ---------------------------------------------------------------------------
+VALKEY_PREFIX = "flight:"
+
+
+def valkey_key(*parts: str) -> str:
+    return VALKEY_PREFIX + ":".join(parts)
+
+
+# Canonical gold table names (dbt + serving must agree on these)
+GOLD_FEATURES_TABLE = "fct_flight_features"          # per-flight ML feature rows
+GOLD_ROUTE_RELIABILITY = "agg_route_reliability"     # delay % by route
+GOLD_AIRPORT_RELIABILITY = "agg_airport_reliability"  # delay % by airport
+GOLD_CARRIER_RELIABILITY = "agg_carrier_reliability"  # delay % by carrier
+GOLD_HOURLY_PATTERNS = "agg_hourly_patterns"          # delay % by hour/dow
+GOLD_AIRPORTS_DIM = "dim_airports"                    # IATA -> name/lat/lon
