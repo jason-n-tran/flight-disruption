@@ -76,3 +76,74 @@ def parse_states_payload(payload: dict) -> list[dict]:
         if parsed is not None:
             out.append(parsed)
     return out
+
+
+def get_access_token(settings: Settings) -> str | None:
+    """Obtain an OAuth2 bearer token, or None if creds are absent/failed."""
+    if not (settings.opensky_client_id and settings.opensky_client_secret):
+        log.warning(
+            "OpenSky creds not set (OPENSKY_CLIENT_ID/SECRET) — falling back to "
+            "anonymous fetch (rate-limited to ~400 credits/day)."
+        )
+        return None
+    with make_client(settings) as client:
+        try:
+            resp = client.post(
+                OPENSKY_TOKEN_URL,
+                data={
+                    "grant_type": "client_credentials",
+                    "client_id": settings.opensky_client_id,
+                    "client_secret": settings.opensky_client_secret,
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+            resp.raise_for_status()
+            return resp.json().get("access_token")
+        except Exception as exc:  # noqa: BLE001 — degrade to anonymous, never crash
+            log.warning("OpenSky token request failed (%s) — using anonymous.", exc)
+            return None
+
+
+def fetch_snapshot(settings: Settings) -> dict:
+    """Fetch a single US-bbox snapshot.
+
+    Returns an api_contract ``/api/live/positions``-shaped dict:
+    ``{as_of, stale_seconds, source, count, aircraft: [...]}``.
+    """
+    token = get_access_token(settings)
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    params = US_BBOX.as_params()
+    with make_client(settings, headers=headers) as client:
+        resp = get_with_retry(
+            client,
+            OPENSKY_STATES_URL,
+            max_retries=settings.max_retries,
+            pause=settings.request_pause_sec,
+            params=params,
+        )
+        payload = resp.json()
+
+    aircraft = parse_states_payload(payload)
+    as_of = int(payload.get("time") or time.time())
+    return {
+        "as_of": as_of,
+        "stale_seconds": max(0, int(time.time()) - as_of),
+        "source": "live",  # genuine live data whether authenticated or anonymous
+        "count": len(aircraft),
+        "aircraft": aircraft,
+    }
+
+
+def write_sample(settings: Settings, dest: Path | str, *, source: str = "sample") -> Path:
+    """Fetch a snapshot and write it as a bundled sample file.
+
+    The ``source`` field is forced to ``sample`` so the demo's fallback chain
+    correctly labels bundled data.
+    """
+    dest = Path(dest)
+    snapshot = fetch_snapshot(settings)
+    snapshot["source"] = source
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
+    log.info("Wrote OpenSky sample %s (%d aircraft)", dest, snapshot["count"])
+    return dest
