@@ -101,3 +101,195 @@ def fetch_airport(
         params=params,
     )
     return parse_archive_response(iata, resp.json())
+
+
+def repair_timestamp_precision(settings: Settings) -> int:
+    """Rewrite already-written weather parquet whose `time` column is nanosecond
+    precision down to microseconds (Spark 3.5 rejects TIMESTAMP(NANOS)).
+
+    Idempotent: files already at us/ms precision are left untouched. Returns the
+    count of files repaired. Lets us fix existing bronze WITHOUT re-fetching
+    (which would spend Open-Meteo quota again).
+    """
+    base = Path(settings.paths.bronze_table(BRONZE_TABLE))
+    files = sorted(base.rglob("*.parquet"))
+    repaired = 0
+    for f in files:
+        try:
+            df = pd.read_parquet(f)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Skip repair (unreadable) %s: %s", f, exc)
+            continue
+        if "time" not in df.columns:
+            continue
+        unit = getattr(df["time"].dtype, "unit", None)
+        if unit != "ns":
+            continue  # already us/ms or not a datetime — nothing to do
+        df["time"] = df["time"].astype("datetime64[us, UTC]")
+        df.to_parquet(f, index=False)
+        repaired += 1
+        log.info("Repaired ns->us timestamps: %s", f)
+    log.info("Timestamp repair complete: %d/%d file(s) rewritten.", repaired, len(files))
+    return repaired
+
+
+def _partition_file(settings: Settings, iata: str) -> Path:
+    base = Path(settings.paths.bronze_table(BRONZE_TABLE))
+    return base / f"iata={iata}" / "data.parquet"
+
+
+def airports_in_bts(
+    settings: Settings,
+    airports: pd.DataFrame,
+    *,
+    top_n: int | None = None,
+) -> pd.DataFrame:
+    """Restrict ``airports`` to those that actually appear in the bronze BTS data.
+
+    Open-Meteo weights each archive call by (variables x days), so a 4-year x
+    5-var pull is *heavy*. Fetching all ~1,251 US airports (incl. tiny Alaska
+    strips with zero scheduled flights) blows the free quota. We only need
+    weather for airports that appear as a BTS origin/dest. Optionally keep just
+    the busiest ``top_n`` by flight volume — these cover the vast majority of
+    flights and keep us well under the rate limit.
+
+    Falls back to the full airport list if bronze BTS isn't present yet.
+    """
+    bts_dir = Path(settings.paths.bronze_table(BTS_BRONZE_TABLE))
+    files = sorted(bts_dir.rglob("*.parquet"))
+    if not files:
+        log.warning(
+            "No bronze BTS found at %s; weather will cover ALL %d airports "
+            "(may hit Open-Meteo rate limits). Ingest BTS first to scope this.",
+            bts_dir, len(airports),
+        )
+        return airports
+
+    counts: dict[str, int] = {}
+    for f in files:
+        df = pd.read_parquet(f, columns=["origin", "dest"])
+        for col in ("origin", "dest"):
+            vc = df[col].value_counts()
+            for code, n in vc.items():
+                counts[code] = counts.get(code, 0) + int(n)
+
+    used = set(counts)
+    scoped = airports[airports["iata"].isin(used)].copy()
+    scoped["_flights"] = scoped["iata"].map(counts).fillna(0).astype(int)
+    scoped = scoped.sort_values("_flights", ascending=False)
+    if top_n is not None:
+        scoped = scoped.head(top_n)
+    log.info(
+        "Weather scope: %d airports in BTS data (of %d US airports)%s",
+        len(scoped), len(airports),
+        f"; capped to top {top_n} by volume" if top_n else "",
+    )
+    return scoped.drop(columns="_flights").reset_index(drop=True)
+
+
+def ingest(
+    settings: Settings,
+    airports: pd.DataFrame,
+    *,
+    years: list[int] | None = None,
+    overwrite: bool = False,
+    scope_to_bts: bool = True,
+    top_n: int | None = None,
+) -> list[Path]:
+    """Fetch + write hourly weather for the relevant airports.
+
+    ``airports`` must have columns iata, lat, lon. By default the set is scoped
+    to airports that appear in the bronze BTS data (``scope_to_bts``) — fetching
+    all US airports blows Open-Meteo's free quota (see :func:`airports_in_bts`).
+    ``top_n`` further caps to the busiest airports by flight volume.
+
+    Partitioned by iata so reruns skip airports already present (resumable).
+    Honors ``Retry-After`` and pauses between calls to stay under the limit.
+    """
+    years = years or BRONZE_YEARS
+    start_date, end_date = _date_range(years)
+    if scope_to_bts:
+        airports = airports_in_bts(settings, airports, top_n=top_n)
+
+    # If a previous run exhausted the daily quota, don't spam: probe ONCE to see
+    # if it has reset. Still limited -> skip the weather stage cleanly so the
+    # pipeline moves on (medallion left-joins weather, so partial is fine).
+    # INGEST_FORCE_WEATHER=1 bypasses the cooldown probe entirely.
+    import os
+    force = os.environ.get("INGEST_FORCE_WEATHER", "").strip().lower() in {"1", "true", "yes"}
+    if _cooldown_active(settings) and not overwrite and not force:
+        if _probe_quota(settings, airports, start_date, end_date):
+            _clear_cooldown(settings)
+        else:
+            remaining = _count_remaining(settings, airports, overwrite)
+            log.warning(
+                "Weather still rate-limited (cooldown active); skipping the "
+                "weather stage. %d airport(s) remain — rerun after the Open-Meteo "
+                "quota resets (≈ next UTC day). Set INGEST_FORCE_WEATHER=1 to "
+                "override the probe.", remaining,
+            )
+            return []
+
+    # Quota awareness (Open-Meteo free tier = 10,000 weighted calls/day; a
+    # 4yr x 5var call ≈ 104 units, so ~90 airports/day). We stop cleanly at the
+    # daily budget and resume next run — the backfill is resumable, so 200
+    # airports complete over ~3 days. A consecutive-429 circuit breaker bails
+    # fast when an earlier run already spent today's quota.
+    budget = settings.weather_daily_budget
+    abort_after = settings.weather_quota_abort_after
+
+    written: list[Path] = []
+    total = len(airports)
+    fetched_today = 0
+    consecutive_429 = 0
+
+    with make_client(settings) as client:
+        for i, row in enumerate(airports.itertuples(index=False), start=1):
+            iata = row.iata
+            out_file = _partition_file(settings, iata)
+            if out_file.exists() and not overwrite:
+                log.info("Skip weather %s (exists)", iata)
+                continue
+
+            if budget and fetched_today >= budget:
+                remaining = _count_remaining(settings, airports, overwrite)
+                log.warning(
+                    "Weather daily budget reached (%d airports this run). "
+                    "%d airport(s) still need weather — RERUN tomorrow to "
+                    "resume (already-written airports are skipped).",
+                    budget, remaining,
+                )
+                break
+
+            try:
+                df = fetch_airport(
+                    settings, client, iata, row.lat, row.lon, start_date, end_date
+                )
+            except Exception as exc:  # noqa: BLE001 — keep going across airports
+                consecutive_429 += 1
+                log.error("Failed weather %s (%d/%d): %s", iata, i, total, exc)
+                if abort_after and consecutive_429 >= abort_after:
+                    remaining = _count_remaining(settings, airports, overwrite)
+                    log.warning(
+                        "Aborting weather stage: %d airports failed back-to-back "
+                        "(Open-Meteo daily quota likely already spent). %d "
+                        "airport(s) still need weather — RERUN after the quota "
+                        "resets (≈ next UTC day); the next run probes once "
+                        "instead of spamming.",
+                        consecutive_429, remaining,
+                    )
+                    _write_cooldown(settings, remaining)
+                    break
+                continue
+
+            consecutive_429 = 0
+            out_file.parent.mkdir(parents=True, exist_ok=True)
+            df.to_parquet(out_file, index=False)
+            fetched_today += 1
+            log.info(
+                "Wrote %s (%d hours) [%d/%d, %d/%d today]",
+                out_file, len(df), i, total, fetched_today, budget,
+            )
+            time.sleep(settings.weather_pause_sec)
+            written.append(out_file)
+    return written
