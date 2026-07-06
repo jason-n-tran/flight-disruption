@@ -293,3 +293,40 @@ def ingest(
             time.sleep(settings.weather_pause_sec)
             written.append(out_file)
     return written
+
+
+def _count_remaining(settings: Settings, airports: pd.DataFrame, overwrite: bool) -> int:
+    """How many in-scope airports still lack a weather parquet (for log hints)."""
+    if overwrite:
+        return len(airports)
+    return sum(
+        1 for row in airports.itertuples(index=False)
+        if not _partition_file(settings, row.iata).exists()
+    )
+
+
+# ----------------------------------------------------------------------
+# Quota cooldown marker
+# ----------------------------------------------------------------------
+# Open-Meteo's 429 carries no Retry-After / reset timestamp, and the free daily
+# quota resets on a wall-clock boundary we can't reliably compute. So instead of
+# guessing when it clears, we record a cooldown marker and, on the next run, do a
+# SINGLE probe to find out — succeed -> clear + proceed, 429 -> skip cleanly.
+
+def _cooldown_path(settings: Settings) -> Path:
+    return Path(settings.lake_root) / _COOLDOWN_FILE
+
+
+def _write_cooldown(settings: Settings, remaining: int) -> None:
+    p = _cooldown_path(settings)
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps({
+            "tripped_at": datetime.now(timezone.utc).isoformat(),
+            "remaining_airports": remaining,
+            "note": "Open-Meteo daily quota exhausted. Next run probes once; "
+                    "rerun after the quota resets (≈ next UTC day).",
+        }))
+        log.info("Wrote weather quota cooldown marker -> %s", p)
+    except OSError as exc:
+        log.debug("Could not write cooldown marker (%s)", exc)
