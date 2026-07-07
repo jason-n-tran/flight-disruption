@@ -140,3 +140,23 @@ def _csv_member(zf: zipfile.ZipFile) -> str:
         raise ValueError("No CSV member found in BTS zip")
     # The CSV filename has spaces+parens; the readme is .html. Take the CSV.
     return names[0]
+
+
+def read_bts_zip(raw: bytes) -> pd.DataFrame:
+    """Extract the CSV from BTS zip bytes and return the selected/renamed frame."""
+    with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+        member = _csv_member(zf)
+        with zf.open(member) as fh:
+            # BTS CSV is latin-1 / cp1252 friendly; low_memory off for mixed types.
+            df = pd.read_csv(fh, encoding="latin-1", low_memory=False)
+    return select_and_rename(df)
+
+
+def _partition_dir(settings: Settings, year: int, month: int) -> Path:
+    base = Path(settings.paths.bronze_table(BRONZE_TABLE))
+    return base / f"year={year}" / f"month={month}"
+
+
+def _partition_exists(settings: Settings, year: int, month: int) -> bool:
+    pdir = _partition_dir(settings, year, month)
+    return pdir.exists() and any(pdir.glob("*.parquet"))
