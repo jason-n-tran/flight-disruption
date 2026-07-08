@@ -330,3 +330,55 @@ def _write_cooldown(settings: Settings, remaining: int) -> None:
         log.info("Wrote weather quota cooldown marker -> %s", p)
     except OSError as exc:
         log.debug("Could not write cooldown marker (%s)", exc)
+
+
+def _clear_cooldown(settings: Settings) -> None:
+    p = _cooldown_path(settings)
+    try:
+        if p.exists():
+            p.unlink()
+            log.info("Cleared weather quota cooldown marker.")
+    except OSError as exc:
+        log.debug("Could not clear cooldown marker (%s)", exc)
+
+
+def _cooldown_active(settings: Settings) -> dict | None:
+    p = _cooldown_path(settings)
+    if not p.exists():
+        return None
+    try:
+        return json.loads(p.read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def _probe_quota(settings: Settings, airports: pd.DataFrame,
+                 start_date: str, end_date: str) -> bool:
+    """One cheap call to see if the quota has reset. True = OK to proceed.
+
+    Probes the first airport that still needs weather. We deliberately do a
+    single try (no internal retries) so a still-exhausted quota fails fast.
+    """
+    pending = [r for r in airports.itertuples(index=False)
+               if not _partition_file(settings, r.iata).exists()]
+    if not pending:
+        return True  # nothing to do; let the normal loop no-op
+    row = pending[0]
+    params = build_archive_params(row.lat, row.lon, start_date, end_date)
+    try:
+        with make_client(settings) as client:
+            resp = get_with_retry(
+                client, OPEN_METEO_ARCHIVE_URL,
+                max_retries=0, pause=0.0, max_backoff=0.0, params=params,
+            )
+        # Persist the probe result so it isn't wasted: write that airport now.
+        df = parse_archive_response(row.iata, resp.json())
+        out_file = _partition_file(settings, row.iata)
+        out_file.parent.mkdir(parents=True, exist_ok=True)
+        df.to_parquet(out_file, index=False)
+        log.info("Quota probe OK (wrote %s) — proceeding with weather backfill.",
+                 row.iata)
+        return True
+    except Exception as exc:  # noqa: BLE001 — probe failed = still limited
+        log.warning("Quota probe failed (%s) — still rate-limited.", exc)
+        return False
