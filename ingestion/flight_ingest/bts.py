@@ -160,3 +160,104 @@ def _partition_dir(settings: Settings, year: int, month: int) -> Path:
 def _partition_exists(settings: Settings, year: int, month: int) -> bool:
     pdir = _partition_dir(settings, year, month)
     return pdir.exists() and any(pdir.glob("*.parquet"))
+
+
+def download_month(
+    settings: Settings,
+    year: int,
+    month: int,
+    *,
+    cache_zip: bool = True,
+) -> bytes:
+    """Download one BTS month ZIP, caching the raw file under ``data_dir``."""
+    settings.ensure_dirs()
+    cache_path = settings.data_dir / f"bts_{year}_{month:02d}.zip"
+    if cache_zip and cache_path.exists() and cache_path.stat().st_size > 0:
+        log.info("Using cached BTS zip %s", cache_path)
+        return cache_path.read_bytes()
+
+    url = BTS_URL_TEMPLATE.format(year=year, month=month)
+    log.info("Downloading BTS %d-%02d from %s", year, month, url)
+    with make_client(settings) as client:
+        resp = get_with_retry(
+            client,
+            url,
+            max_retries=settings.max_retries,
+            pause=settings.request_pause_sec,
+        )
+        raw = resp.content
+    if cache_zip:
+        cache_path.write_bytes(raw)
+    return raw
+
+
+def ingest_month(
+    settings: Settings,
+    year: int,
+    month: int,
+    *,
+    overwrite: bool = False,
+) -> Path | None:
+    """Ingest a single BTS month to bronze. Returns the partition dir or None if skipped."""
+    if not overwrite and _partition_exists(settings, year, month):
+        log.info("Skip BTS %d-%02d (partition exists)", year, month)
+        return None
+    raw = download_month(settings, year, month)
+    df = read_bts_zip(raw)
+    pdir = _partition_dir(settings, year, month)
+    pdir.mkdir(parents=True, exist_ok=True)
+    out_file = pdir / "data.parquet"
+    df.to_parquet(out_file, index=False)
+    log.info("Wrote %s (%d rows)", out_file, len(df))
+    return pdir
+
+
+def reschema_existing(settings: Settings) -> int:
+    """Rewrite already-written BTS parquet with the enforced stable schema.
+
+    Reads each existing partition parquet, re-applies :func:`enforce_schema`, and
+    rewrites in place. Fixes cross-month dtype drift (e.g. a month where pandas
+    inferred a column as double vs int elsewhere) WITHOUT re-downloading. Returns
+    the count of partitions rewritten.
+    """
+    base = Path(settings.paths.bronze_table(BRONZE_TABLE))
+    files = sorted(base.rglob("*.parquet"))
+    fixed = 0
+    for f in files:
+        try:
+            df = pd.read_parquet(f)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Skip reschema (unreadable) %s: %s", f, exc)
+            continue
+        df = enforce_schema(df)
+        df.to_parquet(f, index=False)
+        fixed += 1
+        log.info("Re-schema'd %s", f)
+    log.info("BTS reschema complete: %d/%d file(s) rewritten.", fixed, len(files))
+    return fixed
+
+
+def ingest(
+    settings: Settings,
+    *,
+    years: list[int] | None = None,
+    months: list[int] | None = None,
+    overwrite: bool = False,
+) -> list[Path]:
+    """Ingest a range of BTS months.
+
+    ``years`` defaults to ``BRONZE_YEARS``; ``months`` defaults to all 12.
+    Returns the list of partition dirs actually written (skips excluded).
+    """
+    years = years or BRONZE_YEARS
+    months = months or list(range(1, 13))
+    written: list[Path] = []
+    for y in years:
+        for m in months:
+            try:
+                pdir = ingest_month(settings, y, m, overwrite=overwrite)
+                if pdir is not None:
+                    written.append(pdir)
+            except Exception as exc:  # noqa: BLE001 — keep going across months
+                log.error("Failed BTS %d-%02d: %s", y, m, exc)
+    return written
