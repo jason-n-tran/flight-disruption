@@ -1,0 +1,40 @@
+[project]
+name = "flight-stream"
+version = "0.1.0"
+description = "Live position stream for the Flight Disruption Platform: OpenSky -> NATS JetStream -> consumer -> Valkey cache"
+requires-python = ">=3.11"
+dependencies = [
+    "nats-py>=2.6",
+    "redis>=5.0",
+    "httpx>=0.27",
+    "flight-contracts",
+    "flight-ingest",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "fakeredis>=2.20",
+]
+
+[project.scripts]
+flight-stream = "flight_stream.run:main"
+
+[tool.uv.sources]
+flight-contracts = { path = "../shared", editable = true }
+flight-ingest = { path = "../ingestion", editable = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["flight_stream"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+# Disable a stale, pytest-9-incompatible global plugin if present in the env;
+# harmless when absent. Keeps `python -m pytest -q` green out of the box.
+addopts = "-p no:pycodestyle"
