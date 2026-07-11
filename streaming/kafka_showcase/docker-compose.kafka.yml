@@ -1,0 +1,74 @@
+# Kafka showcase: Redpanda (Kafka-API broker, no JVM/ZooKeeper) + console.
+#
+# This is the SHOWCASE streaming stack (the live demo uses NATS elsewhere).
+# Redpanda is chosen over Kafka+ZooKeeper because it is a single light binary —
+# comfortable on a 16GB machine alongside a local Spark job.
+#
+#   docker compose -f docker-compose.kafka.yml up -d
+#   # producer + Spark run on the HOST (see README), talking to localhost:19092
+#
+# Listeners:
+#   * internal  redpanda:9092   — for containers on this compose network
+#   * external  localhost:19092 — for the host-run producer + spark-submit
+#
+# Run from this directory (streaming/kafka_showcase/).
+
+services:
+  redpanda:
+    image: redpandadata/redpanda:v24.2.7
+    container_name: flight-redpanda
+    command:
+      - redpanda
+      - start
+      - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:19092
+      # Advertise the host-reachable address on the external listener so the
+      # producer and spark-submit (running on the host) can connect.
+      - --advertise-kafka-addr=internal://redpanda:9092,external://localhost:19092
+      - --rpc-addr=0.0.0.0:33145
+      - --advertise-rpc-addr=redpanda:33145
+      - --mode=dev-container        # single-node, low resource
+      - --smp=1                     # 1 core — keep it light
+      - --memory=1G                 # 1 GiB — fits a 16GB machine
+      - --default-log-level=info
+    ports:
+      - "19092:19092"   # Kafka API (host -> producer / spark)
+      - "9644:9644"     # Redpanda admin/metrics
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -E 'Healthy:.+true' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - redpanda-data:/var/lib/redpanda/data
+
+  # Web UI to eyeball topics/messages for the screenshot checklist.
+  console:
+    image: redpandadata/console:v2.7.2
+    container_name: flight-redpanda-console
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    ports:
+      - "8080:8080"   # http://localhost:8080
+    environment:
+      KAFKA_BROKERS: redpanda:9092
+      CONFIG_FILEPATH: ""
+
+  # One-shot: create the topics with sensible partition counts, then exit.
+  # (Auto-create also works, but explicit topics give a cleaner console shot.)
+  topic-init:
+    image: redpandadata/redpanda:v24.2.7
+    container_name: flight-topic-init
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        rpk topic create flight-positions -p 3 -r 1 --brokers redpanda:9092 || true
+        rpk topic create airport-congestion -p 3 -r 1 --brokers redpanda:9092 || true
+        rpk topic list --brokers redpanda:9092
+    restart: "no"
+
+volumes:
+  redpanda-data:
