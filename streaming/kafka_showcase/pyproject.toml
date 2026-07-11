@@ -1,0 +1,25 @@
+[project]
+name = "flight-kafka-showcase"
+version = "0.1.0"
+description = "Kafka (Redpanda) + Spark Structured Streaming showcase: OpenSky -> Kafka -> windowed airport-congestion features"
+requires-python = ">=3.11"
+dependencies = [
+    "kafka-python>=2.0",
+    "pyspark>=3.5,<3.6",
+    "flight-contracts",
+    "flight-ingest",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.uv.sources]
+flight-contracts = { path = "../../shared", editable = true }
+flight-ingest = { path = "../../ingestion", editable = true }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# pyspark isn't needed for the broker-free unit tests; keep the suite fast.
+addopts = "-p no:pycodestyle"

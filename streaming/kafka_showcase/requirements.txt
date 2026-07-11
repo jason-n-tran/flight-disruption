@@ -1,0 +1,15 @@
+# Kafka showcase deps. Pinned to current, compatible versions.
+# Install:  python -m pip install -r requirements.txt
+#
+# pyspark must match the spark-sql-kafka connector version in the spark-submit
+# command (see README): org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1
+
+kafka-python==2.0.2
+pyspark==3.5.1
+
+# flight_ingest (OpenSky fetch/parse) is reused from the repo; install it editable
+# from the repo root so `import flight_ingest` / `import flight_contracts` resolve:
+#   python -m pip install -e ../../ingestion -e ../../shared
+# (left as a comment so this file stays a pure PyPI requirements list)
+
+# Test-only deps are in requirements-dev.txt

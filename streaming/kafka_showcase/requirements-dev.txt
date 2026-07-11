@@ -1,0 +1,4 @@
+# Test/dev deps for the Kafka showcase (broker-free unit tests).
+-r requirements.txt
+
+pytest==8.3.3
