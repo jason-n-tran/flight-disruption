@@ -92,3 +92,75 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     return p
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    _setup_logging(args.verbose)
+    settings = load_settings()
+    log = logging.getLogger("flight_ingest.cli")
+
+    if args.command == "bts":
+        written = bts.ingest(
+            settings,
+            years=_parse_int_list(args.years),
+            months=_parse_int_list(args.months),
+            overwrite=args.overwrite,
+        )
+        log.info("BTS: wrote %d partitions", len(written))
+
+    elif args.command == "weather":
+        airports = openflights.load_airports(settings)
+        written = weather.ingest(
+            settings,
+            airports,
+            years=_parse_int_list(args.years),
+            overwrite=args.overwrite,
+            scope_to_bts=not args.no_scope,
+            top_n=args.top_n,
+        )
+        log.info("Weather: wrote %d airport series", len(written))
+
+    elif args.command == "repair-weather":
+        n = weather.repair_timestamp_precision(settings)
+        log.info("Weather repair: rewrote %d file(s) ns->us", n)
+
+    elif args.command == "reschema-bts":
+        n = bts.reschema_existing(settings)
+        log.info("BTS reschema: rewrote %d partition(s)", n)
+
+    elif args.command == "airports":
+        path = openflights.ingest(settings, overwrite=args.overwrite)
+        log.info("Airports: %s", path)
+
+    elif args.command == "opensky-snapshot":
+        path = opensky.write_sample(settings, args.out)
+        log.info("OpenSky snapshot: %s", path)
+
+    elif args.command == "all":
+        years = _parse_int_list(args.years) or BRONZE_YEARS
+        openflights.ingest(settings, overwrite=args.overwrite)
+        bts.ingest(
+            settings,
+            years=years,
+            months=_parse_int_list(args.months),
+            overwrite=args.overwrite,
+        )
+        airports = openflights.load_airports(settings)
+        weather.ingest(
+            settings, airports, years=years, overwrite=args.overwrite,
+            scope_to_bts=True, top_n=args.top_n,
+        )
+        try:
+            opensky.write_sample(settings, args.snapshot_out)
+        except Exception as exc:  # noqa: BLE001 — snapshot is best-effort
+            log.warning("OpenSky snapshot skipped: %s", exc)
+
+    else:  # pragma: no cover — argparse enforces required subcommand
+        return 2
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
