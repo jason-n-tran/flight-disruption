@@ -120,3 +120,110 @@ def parse_positions(raw: DataFrame) -> DataFrame:
     return parsed.withColumn(
         "event_time", F.to_timestamp(F.from_unixtime(F.col("event_ts")))
     )
+
+
+def congestion_windows(positions: DataFrame, cfg: dict) -> DataFrame:
+    """Windowed count of aircraft per ~CELL_SIZE geo-cell (live congestion).
+
+    Demonstrates: ``withWatermark`` + ``window(...)`` event-time aggregation.
+    Tumbling window when ``slide_duration`` is None, else a sliding window.
+    """
+    cell = cfg["cell_size"]
+
+    # In-bbox filter + cell binning (mirrors spark_app/geo.cell_of).
+    binned = (
+        positions.where(
+            (F.col("lat") >= 24.0)
+            & (F.col("lat") <= 50.0)
+            & (F.col("lon") >= -125.0)
+            & (F.col("lon") <= -66.0)
+        )
+        .withColumn("cell_lat", F.floor(F.col("lat") / F.lit(cell)) * F.lit(cell))
+        .withColumn("cell_lon", F.floor(F.col("lon") / F.lit(cell)) * F.lit(cell))
+    )
+
+    win = (
+        F.window(F.col("event_time"), cfg["window_duration"], cfg["slide_duration"])
+        if cfg["slide_duration"]
+        else F.window(F.col("event_time"), cfg["window_duration"])
+    )
+
+    agg = (
+        binned.withWatermark("event_time", cfg["watermark_delay"])
+        .groupBy(win, F.col("cell_lat"), F.col("cell_lon"))
+        .agg(
+            F.approx_count_distinct("icao24").alias("aircraft_count"),
+            F.sum(F.when(F.col("on_ground"), 1).otherwise(0)).alias("on_ground_count"),
+            F.round(F.avg("altitude"), 0).alias("avg_altitude_m"),
+        )
+    )
+
+    return (
+        agg.where(F.col("aircraft_count") >= F.lit(cfg["min_count"]))
+        .select(
+            F.col("window.start").alias("window_start"),
+            F.col("window.end").alias("window_end"),
+            "cell_lat",
+            "cell_lon",
+            "aircraft_count",
+            "on_ground_count",
+            "avg_altitude_m",
+        )
+    )
+
+
+def run(cfg: dict | None = None) -> None:
+    cfg = cfg or _cfg()
+    spark = build_spark()
+    spark.sparkContext.setLogLevel("WARN")
+
+    positions = parse_positions(read_kafka(spark, cfg))
+    congestion = congestion_windows(positions, cfg)
+
+    queries = []
+
+    # Console sink — the screenshot of the windowed congestion table.
+    queries.append(
+        congestion.orderBy(F.col("aircraft_count").desc())
+        .writeStream.outputMode("complete")
+        .format("console")
+        .option("truncate", "false")
+        .option("numRows", "20")
+        .queryName("congestion_console")
+        .start()
+    )
+
+    # Durable Parquet sink (append mode emits finalized windows past watermark).
+    queries.append(
+        congestion.writeStream.outputMode("append")
+        .format("parquet")
+        .option("path", cfg["output_path"])
+        .option("checkpointLocation", cfg["checkpoint_path"] + "/parquet")
+        .queryName("congestion_parquet")
+        .start()
+    )
+
+    # Optional: re-publish congestion to Kafka topic ``airport-congestion``.
+    if cfg["write_kafka"]:
+        kafka_out = congestion.select(
+            F.concat_ws(
+                ":", F.col("cell_lat").cast("string"), F.col("cell_lon").cast("string")
+            ).alias("key"),
+            F.to_json(F.struct("*")).alias("value"),
+        )
+        queries.append(
+            kafka_out.writeStream.outputMode("append")
+            .format("kafka")
+            .option("kafka.bootstrap.servers", cfg["bootstrap"])
+            .option("topic", cfg["congestion_topic"])
+            .option("checkpointLocation", cfg["checkpoint_path"] + "/kafka")
+            .queryName("congestion_kafka")
+            .start()
+        )
+
+    spark.streams.awaitAnyTermination()
+
+
+if __name__ == "__main__":
+    os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+    run()
