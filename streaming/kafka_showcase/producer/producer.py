@@ -77,3 +77,71 @@ def publish_snapshot(producer, settings: ProducerSettings, snapshot: dict) -> in
         producer.send(settings.topic, key=key, value=value)
     producer.flush()
     return len(pairs)
+
+
+def run(settings: ProducerSettings | None = None) -> None:
+    """Run the poll -> publish loop until interrupted (or ``MAX_POLLS`` reached)."""
+    settings = settings or load_settings()
+    ingest_settings = load_ingest_settings()
+
+    log.info(
+        "Producer up: bootstrap=%s topic=%s poll=%.0fs max_polls=%s",
+        settings.bootstrap_servers,
+        settings.topic,
+        settings.poll_interval_seconds,
+        settings.max_polls or "inf",
+    )
+
+    producer = _make_kafka_producer(settings)
+
+    stop = {"flag": False}
+
+    def _handle_signal(signum, _frame):
+        log.info("Signal %s received — finishing current cycle and exiting.", signum)
+        stop["flag"] = True
+
+    signal.signal(signal.SIGINT, _handle_signal)
+    signal.signal(signal.SIGTERM, _handle_signal)
+
+    polls = 0
+    try:
+        while not stop["flag"]:
+            try:
+                snapshot = fetch_snapshot(ingest_settings)
+                sent = publish_snapshot(producer, settings, snapshot)
+                log.info(
+                    "Snapshot @%s: %d aircraft -> %d messages on '%s'.",
+                    snapshot.get("as_of"),
+                    snapshot.get("count"),
+                    sent,
+                    settings.topic,
+                )
+            except Exception as exc:  # noqa: BLE001 — log + retry, never crash
+                log.warning("Poll/publish cycle failed (%s); retrying next cycle.", exc)
+
+            polls += 1
+            if settings.max_polls and polls >= settings.max_polls:
+                log.info("Reached MAX_POLLS=%d — stopping.", settings.max_polls)
+                break
+
+            # Interruptible sleep so Ctrl-C exits promptly.
+            slept = 0.0
+            while slept < settings.poll_interval_seconds and not stop["flag"]:
+                time.sleep(min(1.0, settings.poll_interval_seconds - slept))
+                slept += 1.0
+    finally:
+        try:
+            producer.flush()
+            producer.close(timeout=10)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Producer close failed: %s", exc)
+        log.info("Producer stopped after %d poll(s).", polls)
+
+
+def main() -> int:
+    run()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
