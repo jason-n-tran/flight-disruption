@@ -89,3 +89,34 @@ def build_spark(app_name: str = "flight-kafka-congestion") -> SparkSession:
         .config("spark.jars.packages", "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1")
         .getOrCreate()
     )
+
+
+def read_kafka(spark: SparkSession, cfg: dict) -> DataFrame:
+    """Read the raw Kafka stream (key/value/timestamp/offset columns)."""
+    return (
+        spark.readStream.format("kafka")
+        .option("kafka.bootstrap.servers", cfg["bootstrap"])
+        .option("subscribe", cfg["topic"])
+        .option("startingOffsets", cfg["starting_offsets"])
+        .option("failOnDataLoss", "false")
+        .load()
+    )
+
+
+def parse_positions(raw: DataFrame) -> DataFrame:
+    """Parse Kafka value JSON -> typed columns with an event-time timestamp.
+
+    ``event_ts`` (unix seconds) becomes the event-time ``event_time`` timestamp
+    that watermarking + windowing operate on.
+    """
+    parsed = (
+        raw.select(
+            F.col("key").cast("string").alias("kafka_key"),
+            F.from_json(F.col("value").cast("string"), MESSAGE_SCHEMA).alias("p"),
+        )
+        .select("kafka_key", "p.*")
+        .where(F.col("lat").isNotNull() & F.col("lon").isNotNull())
+    )
+    return parsed.withColumn(
+        "event_time", F.to_timestamp(F.from_unixtime(F.col("event_ts")))
+    )
