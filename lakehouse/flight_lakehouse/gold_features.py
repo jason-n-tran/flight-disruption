@@ -105,3 +105,127 @@ def _hist_rate(
         ).otherwise(F.lit(global_prior)).alias(out_col),
     )
     return out
+
+
+def build_gold_features(spark: SparkSession, cfg: LakeConfig) -> DataFrame:
+    """Build ``gold/fct_flight_features`` (parquet partitioned by year)."""
+    flights = spark.read.format(
+        "delta" if cfg.is_delta else "parquet"
+    ).load(cfg.paths.silver_table(SILVER_FLIGHTS))
+    weather = spark.read.format(
+        "delta" if cfg.is_delta else "parquet"
+    ).load(cfg.paths.silver_table(SILVER_WEATHER))
+
+    flights = flights.withColumn("day_num", _day_number(F.col("flight_date")))
+
+    # Global historical prior — overall mean label across the whole dataset.
+    # Used as the cold-start fill for entities/days with no prior history.
+    global_prior = flights.select(
+        F.avg(F.col(LABEL_COLUMN).cast(T.DoubleType()))
+    ).first()[0]
+    if global_prior is None:
+        global_prior = 0.0
+
+    # --- Rolling reliability features (leakage-safe) ---------------------------
+    route_hist = _hist_rate(
+        flights, ["origin", "dest"], "route_hist_delay_rate", global_prior
+    )
+    origin_hist = _hist_rate(
+        flights, ["origin"], "origin_hist_delay_rate", global_prior
+    )
+    carrier_hist = _hist_rate(
+        flights, ["carrier"], "carrier_hist_delay_rate", global_prior
+    )
+
+    feats = (
+        flights.join(route_hist, ["origin", "dest", "day_num"], "left")
+        .join(origin_hist, ["origin", "day_num"], "left")
+        .join(carrier_hist, ["carrier", "day_num"], "left")
+    )
+    # Any join miss (shouldn't happen since keys come from the same data) ->
+    # global prior, keeping the column non-null.
+    for c in (
+        "route_hist_delay_rate",
+        "origin_hist_delay_rate",
+        "carrier_hist_delay_rate",
+    ):
+        feats = feats.withColumn(
+            c, F.coalesce(F.col(c), F.lit(global_prior))
+        )
+
+    # --- Weather features at ORIGIN and DEST ----------------------------------
+    # Match each flight to the weather row at the airport for the flight's
+    # scheduled hour. For DEST we use the SAME scheduled hour as the origin
+    # departure — a documented simplification (we don't model en-route time for
+    # the destination-weather proxy; arrival-hour weather would also be a
+    # weaker pre-departure signal).
+    feats = feats.withColumn(
+        "weather_hour_key",
+        (
+            F.year("flight_ts") * F.lit(1000000)
+            + F.month("flight_ts") * F.lit(10000)
+            + F.dayofmonth("flight_ts") * F.lit(100)
+            + F.hour("flight_ts")
+        ).cast(T.LongType()),
+    )
+
+    feats = _join_weather(feats, weather, side="origin")
+    feats = _join_weather(feats, weather, side="dest")
+
+    # --- Assemble the exact contract column set --------------------------------
+    select_exprs = []
+    for col in MODEL_FEATURES:
+        select_exprs.append(F.col(col).alias(col))
+    select_exprs.append(F.col(LABEL_COLUMN).alias(LABEL_COLUMN))
+    for col in IDENTITY_COLUMNS:
+        if col not in MODEL_FEATURES and col != LABEL_COLUMN:
+            select_exprs.append(F.col(col).alias(col))
+
+    out = feats.select(*select_exprs)
+
+    _assert_contract(out)
+
+    write_table(
+        out, cfg.paths.gold_table(GOLD_FEATURES_TABLE), cfg, partition_by=["year"]
+    )
+    return out
+
+
+def _join_weather(feats: DataFrame, weather: DataFrame, side: str) -> DataFrame:
+    """Join weather for ``side`` ('origin'|'dest') at the scheduled hour.
+
+    Produces ``{side}_temp_2m``, ``{side}_precip``, ``{side}_wind_speed``,
+    ``{side}_wind_gusts``, ``{side}_snowfall`` with null -> sensible defaults.
+    """
+    join_iata = "origin" if side == "origin" else "dest"
+
+    w = weather.select(
+        F.col("iata").alias("_w_iata"),
+        F.col("weather_hour_key").alias("_w_key"),
+        *[
+            F.col(var).alias(f"_w_{suffix}")
+            for var, suffix in WEATHER_VAR_TO_SUFFIX.items()
+        ],
+    )
+
+    joined = feats.join(
+        w,
+        (feats[join_iata] == w["_w_iata"])
+        & (feats["weather_hour_key"] == w["_w_key"]),
+        "left",
+    )
+
+    for var, suffix in WEATHER_VAR_TO_SUFFIX.items():
+        out_col = f"{side}_{suffix}"
+        joined = joined.withColumn(
+            out_col,
+            F.coalesce(
+                F.col(f"_w_{suffix}").cast(T.DoubleType()),
+                F.lit(WEATHER_FILL[suffix]),
+            ),
+        )
+
+    drop_cols = ["_w_iata", "_w_key"] + [
+        f"_w_{suffix}" for suffix in WEATHER_VAR_TO_SUFFIX.values()
+    ]
+    return joined.drop(*drop_cols)
