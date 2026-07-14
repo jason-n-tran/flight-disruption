@@ -244,3 +244,11 @@ def build_silver_flights(
     out = df.select(*select_cols)
     write_table(out, cfg.paths.silver_table(SILVER_FLIGHTS), cfg, partition_by=["year"])
     return out
+
+
+def build_silver(spark: SparkSession, cfg: LakeConfig) -> dict[str, DataFrame]:
+    """Build all three silver tables. Airports first (flights filters on it)."""
+    airports = build_silver_airports(spark, cfg)
+    weather = build_silver_weather(spark, cfg)
+    flights = build_silver_flights(spark, cfg, airports)
+    return {"airports": airports, "weather": weather, "flights": flights}
