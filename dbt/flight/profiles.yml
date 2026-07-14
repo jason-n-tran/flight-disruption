@@ -1,0 +1,21 @@
+# Self-contained dbt profile for the flight gold-marts project.
+#
+# Point dbt at this directory with:   export DBT_PROFILES_DIR=$(pwd)
+# (run from dbt/flight/). The DuckDB file path is taken from env DUCKDB_PATH so
+# the marts land in the same file the serving layer reads.
+#
+# The serving demo expects the gold tables (dim_airports, agg_*) in the `main`
+# schema of this DuckDB file.
+flight:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: "{{ env_var('DUCKDB_PATH', './data/lake/gold.duckdb') }}"
+      # Keep all models in the default `main` schema so the serving layer can
+      # read them by bare table name (e.g. SELECT * FROM dim_airports).
+      schema: main
+      threads: 4
+      # Persist any custom extensions if needed (none required for parquet read;
+      # DuckDB reads parquet natively).
+      extensions: []

@@ -1,0 +1,13 @@
+iata,name,city,lat,lon,tz
+ATL,Hartsfield-Jackson Atlanta Intl,Atlanta,33.6367,-84.4281,America/New_York
+ORD,Chicago O'Hare Intl,Chicago,41.9786,-87.9048,America/Chicago
+DFW,Dallas/Fort Worth Intl,Dallas-Fort Worth,32.8968,-97.0380,America/Chicago
+DEN,Denver Intl,Denver,39.8617,-104.6731,America/Denver
+LAX,Los Angeles Intl,Los Angeles,33.9425,-118.4081,America/Los_Angeles
+JFK,John F Kennedy Intl,New York,40.6398,-73.7789,America/New_York
+EWR,Newark Liberty Intl,Newark,40.6925,-74.1687,America/New_York
+SFO,San Francisco Intl,San Francisco,37.6189,-122.3750,America/Los_Angeles
+SEA,Seattle-Tacoma Intl,Seattle,47.4490,-122.3093,America/Los_Angeles
+MIA,Miami Intl,Miami,25.7959,-80.2870,America/New_York
+PHX,Phoenix Sky Harbor Intl,Phoenix,33.4343,-112.0116,America/Phoenix
+BOS,Boston Logan Intl,Boston,42.3643,-71.0052,America/New_York
