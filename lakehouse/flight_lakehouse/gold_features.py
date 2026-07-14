@@ -229,3 +229,34 @@ def _join_weather(feats: DataFrame, weather: DataFrame, side: str) -> DataFrame:
         f"_w_{suffix}" for suffix in WEATHER_VAR_TO_SUFFIX.values()
     ]
     return joined.drop(*drop_cols)
+
+
+def _assert_contract(df: DataFrame) -> None:
+    """Fail loudly if the output columns drift from the contract or a banned
+    column leaked in."""
+    expected = set(MODEL_FEATURES) | {LABEL_COLUMN} | set(IDENTITY_COLUMNS)
+    actual = set(df.columns)
+    if actual != expected:
+        missing = expected - actual
+        extra = actual - expected
+        raise AssertionError(
+            "gold feature columns drifted from contract.\n"
+            f"  missing: {sorted(missing)}\n"
+            f"  extra:   {sorted(extra)}"
+        )
+
+    # Banned (leaky) columns, snake_cased, must not appear.
+    banned_snake = {_snake(c) for c in BANNED_LEAKY_COLUMNS}
+    leaked = banned_snake & actual
+    if leaked:
+        raise AssertionError(f"banned leaky columns present in gold: {sorted(leaked)}")
+
+
+def _snake(name: str) -> str:
+    """CamelCase / Mixed_Case BTS name -> snake_case (mirrors ingestion)."""
+    import re
+
+    s = name.replace("__", "_")
+    s = re.sub(r"(.)([A-Z][a-z]+)", r"\1_\2", s)
+    s = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", s)
+    return s.replace("__", "_").lower()
