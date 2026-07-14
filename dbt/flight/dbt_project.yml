@@ -1,0 +1,68 @@
+name: "flight"
+version: "1.0.0"
+config-version: 2
+
+# This project produces the tested, documented gold analytical marts for the
+# Flight Disruption Intelligence Platform. The marts land as TABLES in a DuckDB
+# file (env DUCKDB_PATH) that the FastAPI serving layer reads directly.
+profile: "flight"
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+snapshot-paths: ["snapshots"]
+analysis-paths: ["analyses"]
+
+target-path: "target"
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+# Project-level vars. `use_seeds: true` builds staging from dbt seeds instead of
+# the real silver parquet lake — used for CI / local dev when the lake is absent.
+vars:
+  use_seeds: false
+
+models:
+  flight:
+    # Staging = lightweight typing/renaming views over sources or seeds.
+    staging:
+      +materialized: view
+      +schema: staging
+    # Marts = the persisted gold tables the serving API queries by name.
+    # NOTE: no +schema here on purpose — marts must live in the default `main`
+    # schema so the serving layer reads them as bare table names.
+    marts:
+      +materialized: table
+
+seeds:
+  flight:
+    +schema: seeds
+    +quote_columns: false
+    seed_flights:
+      +column_types:
+        flight_date: date
+        year: integer
+        month: integer
+        day_of_week: integer
+        dep_hour: integer
+        distance: double
+        crs_dep_time: integer
+        crs_arr_time: integer
+        crs_elapsed_time: double
+        dep_del15: integer
+        dep_delay_minutes: double
+        arr_del15: integer
+        cancelled: integer
+        diverted: integer
+        carrier_delay: double
+        weather_delay: double
+        nas_delay: double
+        security_delay: double
+        late_aircraft_delay: double
+        is_holiday_window: integer
+    seed_airports:
+      +column_types:
+        lat: double
+        lon: double

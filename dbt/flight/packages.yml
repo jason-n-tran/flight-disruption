@@ -1,0 +1,12 @@
+# No external dbt packages are required: the project ships self-contained
+# generic tests (accepted_range, unique_combination) under tests/generic/ so it
+# runs in an offline CI with no access to the dbt package hub.
+#
+# If you prefer the canonical dbt_utils implementations and have network access,
+# uncomment below and run `dbt deps`, then switch the schema.yml test names to
+# `dbt_utils.accepted_range` / `dbt_utils.unique_combination_of_columns`.
+#
+# packages:
+#   - package: dbt-labs/dbt_utils
+#     version: [">=1.1.0", "<2.0.0"]
+packages: []
