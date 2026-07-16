@@ -1,0 +1,19 @@
+version: 2
+
+# Sources point at the PySpark lakehouse silver layer, read directly as parquet
+# via DuckDB's read_parquet (dbt-duckdb external_location). These are used when
+# the project runs with `use_seeds: false` (the default, i.e. against the real
+# lake). When `use_seeds: true`, staging reads from dbt seeds instead and these
+# sources are not referenced.
+sources:
+  - name: silver
+    description: >
+      Conformed silver layer produced by the PySpark lakehouse component,
+      landed as partitioned parquet under $LAKE_ROOT/silver.
+    meta:
+      external_location: "read_parquet('{{ env_var('LAKE_ROOT', './data/lake') }}/silver/{name}/**/*.parquet', union_by_name=true, hive_partitioning=true)"
+    tables:
+      - name: flights
+        description: One row per scheduled flight, conformed + typed from BTS.
+      - name: airports
+        description: Airport dimension conformed from OpenFlights (IATA-keyed).

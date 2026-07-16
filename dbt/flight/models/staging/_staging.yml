@@ -1,0 +1,63 @@
+version: 2
+models:
+- name: stg_flights
+  description: 'Typed, renamed one-row-per-flight view over the silver flights source (or the seed in
+    CI). Cancelled flights are excluded so cancellations are not miscounted as on-time in the downstream
+    reliability marts.
+
+    '
+  columns:
+  - name: flight_date
+    description: Scheduled flight date.
+    data_tests:
+    - not_null
+  - name: dep_hour
+    description: Scheduled departure hour, 0-23, derived from CRSDepTime.
+    data_tests:
+    - not_null
+    - accepted_range:
+        arguments:
+          min_value: 0
+          max_value: 23
+  - name: carrier
+    description: Reporting airline carrier code (e.g. DL, AA).
+    data_tests:
+    - not_null
+  - name: origin
+    description: Origin airport IATA code.
+    data_tests:
+    - not_null
+  - name: dest
+    description: Destination airport IATA code.
+    data_tests:
+    - not_null
+  - name: dep_del15
+    description: Label — 1 if departure delayed >= 15 min, else 0.
+    data_tests:
+    - not_null
+    - accepted_values:
+        arguments:
+          values:
+          - 0
+          - 1
+  - name: dep_delay_minutes
+    description: Departure delay in minutes (>= 0; kept for avg_delay_min).
+  - name: is_holiday_window
+    description: 1 if within +/- 2 days of a US federal holiday, else 0.
+- name: stg_airports
+  description: 'Typed, renamed airport dimension view over the silver airports source (or the seed in
+    CI). One row per IATA code.
+
+    '
+  columns:
+  - name: iata
+    description: Airport IATA code (primary key).
+    data_tests:
+    - not_null
+    - unique
+  - name: name
+    description: Full airport name.
+  - name: lat
+    description: Latitude (decimal degrees).
+  - name: lon
+    description: Longitude (decimal degrees).
