@@ -1,0 +1,279 @@
+version: 2
+models:
+- name: dim_airports
+  description: 'Airport dimension keyed by IATA code. Serves /api/meta/options (dropdown) and the static
+    header of /api/airport/{iata}. Contract: GOLD_AIRPORTS_DIM.
+
+    '
+  columns:
+  - name: iata
+    description: Airport IATA code — primary key.
+    data_tests:
+    - not_null
+    - unique
+  - name: name
+    description: Full airport name.
+    data_tests:
+    - not_null
+  - name: city
+    description: City served.
+  - name: lat
+    description: Latitude in decimal degrees.
+    data_tests:
+    - not_null
+  - name: lon
+    description: Longitude in decimal degrees.
+    data_tests:
+    - not_null
+- name: agg_route_reliability
+  description: 'One row per origin-dest route. Scalar fields for GET /api/reliability/route. Contract:
+    GOLD_ROUTE_RELIABILITY.
+
+    '
+  columns:
+  - name: origin
+    description: Origin airport IATA code.
+    data_tests:
+    - not_null
+    - relationships:
+        arguments:
+          to: ref('dim_airports')
+          field: iata
+  - name: dest
+    description: Destination airport IATA code.
+    data_tests:
+    - not_null
+    - relationships:
+        arguments:
+          to: ref('dim_airports')
+          field: iata
+  - name: flights
+    description: Number of (operated, non-cancelled) flights on the route.
+    data_tests:
+    - not_null
+  - name: delay_rate
+    description: Share of flights with dep_del15 = 1 (0..1).
+    data_tests:
+    - not_null
+    - accepted_range:
+        arguments:
+          min_value: 0
+          max_value: 1
+  - name: avg_delay_min
+    description: Average departure delay in minutes across the route.
+    data_tests:
+    - not_null
+  data_tests:
+  - unique_combination:
+      arguments:
+        columns:
+        - origin
+        - dest
+- name: agg_route_carrier_reliability
+  description: 'One row per origin-dest-carrier. Supplies the `by_carrier` breakdown of GET /api/reliability/route.
+
+    '
+  columns:
+  - name: origin
+    description: Origin airport IATA code.
+    data_tests:
+    - not_null
+    - relationships:
+        arguments:
+          to: ref('dim_airports')
+          field: iata
+  - name: dest
+    description: Destination airport IATA code.
+    data_tests:
+    - not_null
+  - name: carrier
+    description: Reporting airline carrier code.
+    data_tests:
+    - not_null
+  - name: flights
+    description: Number of flights for this route+carrier.
+    data_tests:
+    - not_null
+  - name: delay_rate
+    description: Share of flights with dep_del15 = 1 (0..1).
+    data_tests:
+    - not_null
+    - accepted_range:
+        arguments:
+          min_value: 0
+          max_value: 1
+  data_tests:
+  - unique_combination:
+      arguments:
+        columns:
+        - origin
+        - dest
+        - carrier
+- name: agg_airport_reliability
+  description: 'One row per origin airport. Scalar overall_delay_rate for GET /api/airport/{iata}. Contract:
+    GOLD_AIRPORT_RELIABILITY.
+
+    '
+  columns:
+  - name: origin
+    description: Origin airport IATA code — primary key.
+    data_tests:
+    - not_null
+    - unique
+    - relationships:
+        arguments:
+          to: ref('dim_airports')
+          field: iata
+  - name: flights
+    description: Number of operated flights departing this airport.
+    data_tests:
+    - not_null
+  - name: overall_delay_rate
+    description: Share of departures with dep_del15 = 1 (0..1).
+    data_tests:
+    - not_null
+    - accepted_range:
+        arguments:
+          min_value: 0
+          max_value: 1
+- name: agg_airport_hourly
+  description: 'One row per origin airport + departure hour. Supplies the by_hour chart of GET /api/airport/{iata}.
+
+    '
+  columns:
+  - name: origin
+    description: Origin airport IATA code.
+    data_tests:
+    - not_null
+    - relationships:
+        arguments:
+          to: ref('dim_airports')
+          field: iata
+  - name: hour
+    description: Scheduled departure hour, 0-23.
+    data_tests:
+    - not_null
+    - accepted_range:
+        arguments:
+          min_value: 0
+          max_value: 23
+  - name: flights
+    description: Number of flights in this origin+hour cell.
+    data_tests:
+    - not_null
+  - name: delay_rate
+    description: Share of flights with dep_del15 = 1 (0..1).
+    data_tests:
+    - not_null
+    - accepted_range:
+        arguments:
+          min_value: 0
+          max_value: 1
+  data_tests:
+  - unique_combination:
+      arguments:
+        columns:
+        - origin
+        - hour
+- name: agg_airport_worst_routes
+  description: 'One row per origin airport + destination, ranked worst-first by delay rate (column rnk).
+    Supplies the worst_routes list of GET /api/airport/{iata}.
+
+    '
+  columns:
+  - name: origin
+    description: Origin airport IATA code.
+    data_tests:
+    - not_null
+    - relationships:
+        arguments:
+          to: ref('dim_airports')
+          field: iata
+  - name: dest
+    description: Destination airport IATA code.
+    data_tests:
+    - not_null
+  - name: flights
+    description: Number of flights on the route.
+    data_tests:
+    - not_null
+  - name: delay_rate
+    description: Share of flights with dep_del15 = 1 (0..1).
+    data_tests:
+    - not_null
+    - accepted_range:
+        arguments:
+          min_value: 0
+          max_value: 1
+  - name: rnk
+    description: Rank within origin, 1 = worst delay rate.
+    data_tests:
+    - not_null
+  data_tests:
+  - unique_combination:
+      arguments:
+        columns:
+        - origin
+        - dest
+- name: agg_carrier_reliability
+  description: 'One row per carrier. Contract: GOLD_CARRIER_RELIABILITY.
+
+    '
+  columns:
+  - name: carrier
+    description: Reporting airline carrier code — primary key.
+    data_tests:
+    - not_null
+    - unique
+  - name: flights
+    description: Number of operated flights by the carrier.
+    data_tests:
+    - not_null
+  - name: delay_rate
+    description: Share of flights with dep_del15 = 1 (0..1).
+    data_tests:
+    - not_null
+    - accepted_range:
+        arguments:
+          min_value: 0
+          max_value: 1
+- name: agg_hourly_patterns
+  description: 'One row per departure hour + day-of-week. Feeds the temporal-patterns chart. Contract:
+    GOLD_HOURLY_PATTERNS.
+
+    '
+  columns:
+  - name: dep_hour
+    description: Scheduled departure hour, 0-23.
+    data_tests:
+    - not_null
+    - accepted_range:
+        arguments:
+          min_value: 0
+          max_value: 23
+  - name: day_of_week
+    description: ISO day of week, 1 (Mon) - 7 (Sun).
+    data_tests:
+    - not_null
+    - accepted_range:
+        arguments:
+          min_value: 1
+          max_value: 7
+  - name: flights
+    description: Number of flights in this hour+dow cell.
+    data_tests:
+    - not_null
+  - name: delay_rate
+    description: Share of flights with dep_del15 = 1 (0..1).
+    data_tests:
+    - not_null
+    - accepted_range:
+        arguments:
+          min_value: 0
+          max_value: 1
+  data_tests:
+  - unique_combination:
+      arguments:
+        columns:
+        - dep_hour
+        - day_of_week
