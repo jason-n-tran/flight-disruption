@@ -195,3 +195,88 @@ def coerce_dtypes(
             # internally anyway, so no meaningful precision loss for these feats.
             df[col] = pd.to_numeric(df[col], errors="coerce").astype("float32")
     return df
+
+
+def extract_categories(df: pd.DataFrame) -> dict[str, list]:
+    """Return the sorted level set for each categorical feature (for metadata)."""
+    cats: dict[str, list] = {}
+    for col in CATEGORICAL_FEATURES:
+        if col not in df.columns:
+            continue
+        vals = pd.Series(df[col]).dropna().unique().tolist()
+        # normalise to JSON-safe python scalars
+        norm = [int(v) if isinstance(v, (np.integer,)) else v for v in vals]
+        norm = sorted(norm, key=lambda x: (str(type(x)), x))
+        cats[col] = norm
+    return cats
+
+
+def load_features(data: str | os.PathLike) -> pd.DataFrame:
+    """Load the gold feature table from a parquet directory or a DuckDB file.
+
+    * If ``data`` is a directory or ``.parquet`` glob -> read parquet (the lake).
+    * If ``data`` ends in ``.duckdb``/``.db`` -> query ``GOLD_FEATURES_TABLE``.
+
+    Returns columns in the canonical (model features, label, identity) order when
+    available; missing identity columns are tolerated (only year + label are
+    strictly required for the pipeline).
+    """
+    path = Path(data)
+    # De-dup while preserving order: origin/dest appear in BOTH MODEL_FEATURES
+    # and IDENTITY_COLUMNS; selecting them twice yields duplicate DataFrame cols.
+    want = list(dict.fromkeys(MODEL_FEATURES + [LABEL_COLUMN] + IDENTITY_COLUMNS))
+    if str(path).endswith((".duckdb", ".db")):
+        import duckdb  # local import: optional in some contexts
+
+        from .config import GOLD_FEATURES_TABLE
+
+        con = duckdb.connect(str(path), read_only=True)
+        try:
+            # Cap DuckDB's own working memory so it doesn't compete with pandas
+            # for the (often WSL2-limited) container RAM. Env-overridable.
+            mem_limit = os.environ.get("DUCKDB_MEMORY_LIMIT", "2GB")
+            try:
+                con.execute(f"PRAGMA memory_limit='{mem_limit}'")
+                con.execute("PRAGMA threads=2")
+            except Exception:  # noqa: BLE001 — pragmas are best-effort
+                pass
+            # Project only the needed columns IN DuckDB (not SELECT *): with
+            # ~27M rows, pulling unused columns would balloon memory.
+            available = {
+                r[0] for r in con.execute(
+                    f"SELECT column_name FROM information_schema.columns "
+                    f"WHERE table_name = '{GOLD_FEATURES_TABLE}'"
+                ).fetchall()
+            }
+            cols = [c for c in want if c in available]
+            _check_required(available)
+            collist = ", ".join(f'"{c}"' for c in cols)
+            # Go via Arrow and map dtypes on the way into pandas: string cols ->
+            # category (origin/dest/carrier over 27M rows as object strings are
+            # the big memory spike), and Arrow buffers are shared, not re-copied.
+            tbl = con.execute(
+                f"SELECT {collist} FROM {GOLD_FEATURES_TABLE}"
+            ).fetch_arrow_table()
+        finally:
+            con.close()
+        # strings_to_categorical: origin/dest/carrier as category instead of
+        # fat object arrays (the big spike at ~27M rows). split_blocks +
+        # self_destruct free Arrow buffers as they convert, halving peak.
+        df = tbl.to_pandas(
+            strings_to_categorical=True,
+            split_blocks=True,
+            self_destruct=True,
+        )
+        del tbl
+        return df
+
+    # parquet: either a directory partitioned by year, or a single file. Project
+    # columns at read time so we never materialize unused ones.
+    import pyarrow.parquet as pq
+
+    schema_names = set(pq.ParquetDataset(path).schema.names) if path.is_dir() else \
+        set(pq.read_schema(path).names)
+    _check_required(schema_names)
+    cols = [c for c in want if c in schema_names]
+    df = pd.read_parquet(path, columns=cols)
+    return df
