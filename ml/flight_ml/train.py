@@ -68,3 +68,60 @@ def _scale_pos_weight(y: pd.Series) -> float:
     if pos <= 0:
         return 1.0
     return max(neg / pos, 1.0)
+
+
+def train_model(
+    fit: pd.DataFrame,
+    valid: pd.DataFrame,
+    categories: dict[str, list],
+    params: dict | None = None,
+    num_boost_round: int = 800,
+    early_stopping_rounds: int = 50,
+) -> TrainedModel:
+    """Train LightGBM on ``fit`` with early stopping on the temporal ``valid`` slice.
+
+    ``categories`` (from :func:`flight_ml.data.extract_categories`, derived on the
+    full TRAIN set) pins categorical level sets so fit/valid/test/serving share
+    identical encodings.
+    """
+    params = {**DEFAULT_PARAMS, **(params or {})}
+    spw = _scale_pos_weight(fit[LABEL_COLUMN])
+    params["scale_pos_weight"] = spw
+
+    fit_c = coerce_dtypes(fit, categories)
+    valid_c = coerce_dtypes(valid, categories)
+
+    dtrain = lgb.Dataset(
+        fit_c[MODEL_FEATURES],
+        label=fit_c[LABEL_COLUMN].astype(int),
+        categorical_feature=CATEGORICAL_FEATURES,
+        free_raw_data=False,
+    )
+    dvalid = lgb.Dataset(
+        valid_c[MODEL_FEATURES],
+        label=valid_c[LABEL_COLUMN].astype(int),
+        categorical_feature=CATEGORICAL_FEATURES,
+        reference=dtrain,
+        free_raw_data=False,
+    )
+
+    booster = lgb.train(
+        params,
+        dtrain,
+        num_boost_round=num_boost_round,
+        valid_sets=[dtrain, dvalid],
+        valid_names=["train", "valid"],
+        callbacks=[
+            lgb.early_stopping(early_stopping_rounds, verbose=False),
+            lgb.log_evaluation(period=0),
+        ],
+    )
+
+    return TrainedModel(
+        booster=booster,
+        feature_names=list(MODEL_FEATURES),
+        categorical_features=list(CATEGORICAL_FEATURES),
+        categories=categories,
+        best_iteration=int(booster.best_iteration or booster.current_iteration()),
+        scale_pos_weight=spw,
+    )
