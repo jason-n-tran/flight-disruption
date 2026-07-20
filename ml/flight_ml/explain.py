@@ -57,3 +57,61 @@ def build_explainer(model: TrainedModel) -> Explainer:
         feature_names=list(model.feature_names),
         categories=model.categories,
     )
+
+
+def top_factors(
+    explainer: Explainer,
+    feature_row: dict | pd.Series | pd.DataFrame,
+    k: int = 3,
+) -> list[dict]:
+    """Return the signed top-k feature contributors for ONE flight.
+
+    Output matches api_contract ``top_factors``::
+
+        [{"feature": "origin_wind_gusts", "value": 41.2,
+          "contribution": 0.08, "direction": "increases"}, ...]
+
+    ``value`` is the raw feature value as supplied (numeric or category label).
+    Sorted by absolute contribution, descending.
+    """
+    row_df = _as_one_row_df(feature_row)
+    shap_vals = explainer.shap_values(row_df)[0]  # (n_feat,)
+
+    order = np.argsort(np.abs(shap_vals))[::-1][:k]
+    factors: list[dict] = []
+    for i in order:
+        feat = explainer.feature_names[i]
+        raw_val = row_df.iloc[0][feat]
+        contribution = float(shap_vals[i])
+        factors.append(
+            {
+                "feature": feat,
+                "value": _jsonable(raw_val),
+                "contribution": round(contribution, 6),
+                "direction": "increases" if contribution >= 0 else "decreases",
+            }
+        )
+    return factors
+
+
+def _as_one_row_df(feature_row) -> pd.DataFrame:
+    if isinstance(feature_row, pd.DataFrame):
+        df = feature_row.iloc[[0]].copy()
+    elif isinstance(feature_row, pd.Series):
+        df = feature_row.to_frame().T.copy()
+    else:  # dict
+        df = pd.DataFrame([feature_row])
+    missing = [c for c in MODEL_FEATURES if c not in df.columns]
+    if missing:
+        raise ValueError(f"feature_row missing model features: {missing}")
+    return df[MODEL_FEATURES]
+
+
+def _jsonable(v):
+    if isinstance(v, (np.integer,)):
+        return int(v)
+    if isinstance(v, (np.floating,)):
+        return float(v)
+    if pd.isna(v):
+        return None
+    return v
