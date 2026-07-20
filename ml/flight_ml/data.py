@@ -280,3 +280,20 @@ def load_features(data: str | os.PathLike) -> pd.DataFrame:
     cols = [c for c in want if c in schema_names]
     df = pd.read_parquet(path, columns=cols)
     return df
+
+
+def _check_required(available: set[str]) -> None:
+    """Fail early if the gold table lacks model features / label / year."""
+    missing_required = [c for c in MODEL_FEATURES + [LABEL_COLUMN, "year"]
+                        if c not in available]
+    if missing_required:
+        raise ValueError(
+            f"Gold feature table is missing required columns: {missing_required}"
+        )
+
+
+def _select_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Back-compat helper (tests / in-memory frames): keep contract columns."""
+    _check_required(set(df.columns))
+    keep = [c for c in MODEL_FEATURES + [LABEL_COLUMN] + IDENTITY_COLUMNS if c in df.columns]
+    return df[keep]
