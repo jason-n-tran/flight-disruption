@@ -61,3 +61,74 @@ def _native_proba_from_codes(model: TrainedModel, codes: np.ndarray) -> np.ndarr
         num_iteration=model.best_iteration or None,
     )
     return np.asarray(preds, dtype="float64")
+
+
+def export_onnx(model: TrainedModel, out: str | None = None) -> Path:
+    """Convert the LightGBM booster to ONNX and write ``model.onnx``."""
+    from onnxmltools import convert_lightgbm
+    from onnxmltools.convert.common.data_types import FloatTensorType
+
+    n_features = len(MODEL_FEATURES)
+    initial_types = [("input", FloatTensorType([None, n_features]))]
+    onnx_model = convert_lightgbm(
+        model.booster,
+        initial_types=initial_types,
+        zipmap=False,
+        target_opset=None,
+    )
+    path = artifacts_dir(out) / ONNX_FILE
+    with open(path, "wb") as f:
+        f.write(onnx_model.SerializeToString())
+    return path
+
+
+def portability_test(
+    model: TrainedModel,
+    sample: pd.DataFrame,
+    onnx_path: str | Path | None = None,
+    out: str | None = None,
+    atol: float = 1e-4,
+) -> dict:
+    """Load ONNX in onnxruntime, score ``sample``, assert it matches native.
+
+    Returns a dict with ``max_abs_diff``, ``passed``, ``n``, and ``tolerance``.
+    Raises AssertionError if the difference exceeds ``atol`` (so the pipeline
+    surfaces a real portability regression).
+    """
+    import onnxruntime as ort
+
+    onnx_path = Path(onnx_path) if onnx_path else artifacts_dir(out) / ONNX_FILE
+    codes = encode_codes(sample, model.categories)
+
+    native = _native_proba_from_codes(model, codes)
+
+    sess = ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
+    input_name = sess.get_inputs()[0].name
+    outputs = sess.run(None, {input_name: codes})
+    onnx_proba = _extract_positive_proba(outputs, n=len(sample))
+
+    max_abs_diff = float(np.max(np.abs(native - onnx_proba)))
+    passed = max_abs_diff <= atol
+    result = {
+        "n": int(len(sample)),
+        "tolerance": atol,
+        "max_abs_diff": max_abs_diff,
+        "passed": bool(passed),
+    }
+    assert passed, (
+        f"ONNX portability test FAILED: max_abs_diff={max_abs_diff:.2e} > atol={atol:.0e}"
+    )
+    return result
+
+
+def _extract_positive_proba(outputs: list, n: int) -> np.ndarray:
+    """Pull P(class=1) out of onnxruntime outputs (handles label+proba layouts)."""
+    # onnxmltools lgbm classifier (zipmap=False) returns [labels, probabilities]
+    for arr in outputs:
+        a = np.asarray(arr)
+        if a.ndim == 2 and a.shape[0] == n and a.shape[1] == 2:
+            return a[:, 1].astype("float64")
+        if a.ndim == 2 and a.shape[0] == n and a.shape[1] == 1:
+            return a[:, 0].astype("float64")
+    # fallback: last output flattened
+    return np.asarray(outputs[-1]).reshape(n, -1)[:, -1].astype("float64")
