@@ -168,3 +168,15 @@ def load_input(args) -> pd.DataFrame:
         return make_synthetic(n_per_year=n)
     print(f"[data] loading gold feature table from {args.data}")
     return load_features(args.data)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(description="Flight delay ML training pipeline.")
+    p.add_argument("--data", help="parquet dir/file or .duckdb path (gold fct_flight_features)")
+    p.add_argument("--out", default=None, help="artifacts output dir (default ml/artifacts)")
+    p.add_argument("--synthetic", action="store_true", help="run on generated data")
+    p.add_argument("--synthetic-rows", type=int, default=4000, help="rows/year for synthetic")
+    p.add_argument("--no-onnx", action="store_true", help="skip ONNX export/portability")
+    p.add_argument("--no-mlflow", action="store_true", help="skip MLflow tracking")
+    p.add_argument("--calibration", default="isotonic", choices=["isotonic", "sigmoid"])
+    return p
