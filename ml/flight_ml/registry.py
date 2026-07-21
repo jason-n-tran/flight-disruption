@@ -88,3 +88,57 @@ class _NoopRun:
     def log_dict(self, *_a, **_k): ...
     def log_lightgbm(self, *_a, **_k): return None
     def register(self, *_a, **_k): return None
+
+
+class _MlflowRun:
+    def __init__(self, mlflow_mod):
+        self._mlflow = mlflow_mod
+
+    def _safe(self, fn):
+        try:
+            return fn()
+        except Exception as exc:
+            warnings.warn(f"mlflow call failed: {exc}")
+            return None
+
+    def log_params(self, params: dict):
+        self._safe(lambda: self._mlflow.log_params(_stringify(params)))
+
+    def log_metrics(self, metrics: dict):
+        clean = {k: float(v) for k, v in metrics.items() if _is_number(v)}
+        self._safe(lambda: self._mlflow.log_metrics(clean))
+
+    def log_artifact(self, path: str):
+        self._safe(lambda: self._mlflow.log_artifact(str(path)))
+
+    def log_artifacts(self, path: str):
+        self._safe(lambda: self._mlflow.log_artifacts(str(path)))
+
+    def log_dict(self, obj: dict, artifact_file: str):
+        self._safe(lambda: self._mlflow.log_dict(obj, artifact_file))
+
+    def log_lightgbm(self, booster, model_name: str | None = None):
+        """Log the LightGBM booster and (best-effort) register it."""
+        import mlflow.lightgbm as ml_lgb
+
+        info = self._safe(
+            lambda: ml_lgb.log_model(booster, name="model")
+        )
+        name = model_name or os.environ.get("MLFLOW_MODEL_NAME", DEFAULT_MODEL_NAME)
+        if info is not None:
+            self._safe(
+                lambda: self._mlflow.register_model(info.model_uri, name)
+            )
+        return info
+
+
+def _is_number(v) -> bool:
+    try:
+        float(v)
+        return v == v  # not NaN
+    except (TypeError, ValueError):
+        return False
+
+
+def _stringify(params: dict) -> dict:
+    return {k: (v if isinstance(v, (int, float, str, bool)) else str(v)) for k, v in params.items()}
