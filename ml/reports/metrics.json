@@ -1,0 +1,16 @@
+{
+  "n_test": 1500,
+  "test_positive_rate": 0.368,
+  "model_roc_auc": 0.6124096113862899,
+  "model_pr_auc": 0.4596678777370655,
+  "model_brier_raw": 0.2257762726273347,
+  "model_brier_calibrated": 0.22417242251711658,
+  "baseline_roc_auc": 0.5274720234819299,
+  "baseline_pr_auc": 0.3948207799552217,
+  "baseline_brier": 0.23467169282339115,
+  "roc_auc_lift": 0.08493758790436001,
+  "pr_auc_lift": 0.06484709778184383,
+  "beats_baseline": true,
+  "calib_brier_before": 0.22699260554845202,
+  "calib_brier_after": 0.2171454465033662
+}
