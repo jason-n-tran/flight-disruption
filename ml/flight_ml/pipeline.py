@@ -180,3 +180,38 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-mlflow", action="store_true", help="skip MLflow tracking")
     p.add_argument("--calibration", default="isotonic", choices=["isotonic", "sigmoid"])
     return p
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    df = load_input(args)
+    out = args.out or str(artifacts_dir())
+    summary = run_pipeline(
+        df,
+        out=out,
+        do_onnx=not args.no_onnx,
+        do_mlflow=not args.no_mlflow,
+        calibration_method=args.calibration,
+    )
+    m = summary["metrics"]
+    print("\n=== PIPELINE COMPLETE ===")
+    print(json.dumps({
+        "roc_auc": round(m["model_roc_auc"], 4),
+        "pr_auc": round(m["model_pr_auc"], 4),
+        "brier_calibrated": round(m["model_brier_calibrated"], 4),
+        "beats_baseline": m["beats_baseline"],
+        "roc_auc_lift": round(m["roc_auc_lift"], 4),
+        "pr_auc_lift": round(m["pr_auc_lift"], 4),
+        "onnx_passed": summary["onnx"]["passed"] if summary["onnx"] else None,
+    }, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    # ensure UTF-8 stdout for the report prints on Windows
+    os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+    except Exception:
+        pass
+    raise SystemExit(main())
