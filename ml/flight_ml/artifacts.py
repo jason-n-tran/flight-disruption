@@ -196,3 +196,12 @@ def predict_proba_one(
         result["top_factors"] = top_factors(expl, row, k=k_factors)
 
     return result
+
+
+def raw_proba_batch(artifacts: Artifacts, df: pd.DataFrame) -> np.ndarray:
+    """Uncalibrated batch scoring (used by tests to compare with predict_proba_one)."""
+    x = coerce_dtypes(df, artifacts.categories)[MODEL_FEATURES]
+    return np.asarray(
+        artifacts.booster.predict(x, num_iteration=artifacts.best_iteration or None),
+        dtype="float64",
+    )
