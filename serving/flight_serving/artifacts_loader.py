@@ -74,3 +74,83 @@ def _local_fallback(settings: Settings) -> dict[str, str]:
         "duckdb_path": duckdb_path,
         "source": "sample" if bundle_dir == settings.sample_dir else "local",
     }
+
+
+def _bundle_present(directory: str) -> bool:
+    d = Path(directory)
+    return all((d / f).exists() for f in _BUNDLE_FILES)
+
+
+def _pull_from_s3(settings: Settings) -> dict[str, str]:
+    """Download the latest bundle + gold DuckDB from S3-compatible storage."""
+    import boto3  # local import: only needed when S3 configured
+    from botocore.config import Config as BotoConfig
+
+    cache = Path(settings.artifact_cache_dir)
+    cache.mkdir(parents=True, exist_ok=True)
+
+    client = boto3.client(
+        "s3",
+        endpoint_url=settings.s3_endpoint or None,
+        aws_access_key_id=settings.s3_access_key_id,
+        aws_secret_access_key=settings.s3_secret_access_key,
+        region_name=settings.s3_region,
+        config=BotoConfig(signature_version="s3v4", s3={"addressing_style": "path"}),
+    )
+
+    prefix = settings.s3_prefix.rstrip("/")
+    wanted = list(_BUNDLE_FILES) + [_GOLD_FILE]
+    pulled: list[str] = []
+    for name in wanted:
+        key = f"{prefix}/{name}"
+        dest = cache / name
+        try:
+            client.download_file(settings.s3_bucket, key, str(dest))
+            pulled.append(name)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Could not pull s3://%s/%s (%s)", settings.s3_bucket, key, exc)
+
+    # Require the full model bundle; if any bundle file is missing, fall back.
+    if not _bundle_present(str(cache)):
+        log.warning(
+            "S3 pull incomplete (got %s); falling back to local/sample", pulled
+        )
+        # Backfill any missing bundle file from the sample so the API still boots.
+        _backfill_from_sample(settings, cache)
+        if not _bundle_present(str(cache)):
+            return _local_fallback(settings)
+
+    gold_from_s3 = _GOLD_FILE in pulled
+    duckdb_path = cache / _GOLD_FILE
+    if not duckdb_path.exists():
+        # No gold pulled — backfill from sample so queries still work.
+        sample_gold = Path(settings.sample_dir) / _GOLD_FILE
+        if sample_gold.exists():
+            shutil.copyfile(sample_gold, duckdb_path)
+
+    # Be honest about what actually came from S3 vs sample backfill, so the logs
+    # don't claim an s3 pull when nothing was published yet (the common pre-
+    # pipeline state — all keys 404).
+    bundle_from_s3 = all(f in pulled for f in _BUNDLE_FILES)
+    if bundle_from_s3 and gold_from_s3:
+        source = "s3"
+        log.info("Pulled all artifacts from s3://%s/%s", settings.s3_bucket, prefix)
+    elif pulled:
+        source = "s3+sample"
+        log.warning(
+            "Partial S3 pull (got %s); backfilled the rest from the bundled "
+            "sample. Run the Working-PC pipeline to publish real artifacts.",
+            pulled,
+        )
+    else:
+        source = "sample"
+        log.warning(
+            "Nothing in s3://%s/%s yet (all keys 404) — serving the bundled "
+            "SAMPLE model. This is expected until the Working-PC pipeline "
+            "publishes real artifacts.", settings.s3_bucket, prefix,
+        )
+    return {
+        "bundle_dir": str(cache),
+        "duckdb_path": str(duckdb_path),
+        "source": source,
+    }
