@@ -102,3 +102,30 @@ def fetch_point_weather(
         return default_weather(), False
 
     return _extract_hour(payload, target_date, dep_hour)
+
+
+def _extract_hour(payload: dict, target_date: date, dep_hour: int) -> tuple[dict, bool]:
+    hourly = payload.get("hourly") or {}
+    times = hourly.get("time") or []
+    if not times:
+        return default_weather(), False
+
+    target_prefix = f"{target_date.isoformat()}T{dep_hour:02d}:00"
+    idx = None
+    for i, t in enumerate(times):
+        if str(t).startswith(target_prefix):
+            idx = i
+            break
+    if idx is None:
+        # Hour not present (e.g. past the horizon for that day) -> defaults.
+        log.info("Forecast hour %s not found; using defaults", target_prefix)
+        return default_weather(), False
+
+    out = dict(_DEFAULTS)
+    ok = False
+    for omv, suffix in _VAR_MAP.items():
+        series = hourly.get(omv) or []
+        if idx < len(series) and series[idx] is not None:
+            out[suffix] = float(series[idx])
+            ok = True
+    return out, ok
