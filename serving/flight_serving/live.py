@@ -150,3 +150,34 @@ def airport_congestion(positions: dict, lat: float, lon: float) -> dict:
         if abs(alat - lat) <= r and abs(alon - lon) <= r:
             nearby += 1
     return {"aircraft_nearby": nearby, "level": _congestion_level(nearby)}
+
+
+def _congestion_level(n: int) -> str:
+    if n >= 30:
+        return "high"
+    if n >= 10:
+        return "moderate"
+    return "low"
+
+
+# ----------------------------------------------------------------------
+def _connect_valkey(settings: Settings):
+    try:
+        import redis  # redis client speaks the Valkey protocol
+    except ImportError:  # pragma: no cover
+        log.warning("redis client not installed; live positions will use sample")
+        return None
+    try:
+        client = redis.Redis(
+            host=settings.valkey_host,
+            port=settings.valkey_port,
+            socket_connect_timeout=2,
+            socket_timeout=2,
+            decode_responses=True,
+        )
+        # Lazy: do not ping at startup (Valkey may come up after us). Reads
+        # degrade gracefully on failure.
+        return client
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Could not init Valkey client (%s); using sample", exc)
+        return None
