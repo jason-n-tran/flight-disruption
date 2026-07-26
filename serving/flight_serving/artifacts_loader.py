@@ -154,3 +154,12 @@ def _pull_from_s3(settings: Settings) -> dict[str, str]:
         "duckdb_path": str(duckdb_path),
         "source": source,
     }
+
+
+def _backfill_from_sample(settings: Settings, cache: Path) -> None:
+    sample = Path(settings.sample_dir)
+    for name in _BUNDLE_FILES:
+        dest = cache / name
+        src = sample / name
+        if not dest.exists() and src.exists():
+            shutil.copyfile(src, dest)
