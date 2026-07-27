@@ -181,3 +181,24 @@ def _connect_valkey(settings: Settings):
     except Exception as exc:  # noqa: BLE001
         log.warning("Could not init Valkey client (%s); using sample", exc)
         return None
+
+
+def _stale_seconds(payload: dict) -> int | None:
+    as_of = payload.get("as_of")
+    if not as_of:
+        return None
+    try:
+        return max(0, int(time.time()) - int(as_of))
+    except (TypeError, ValueError):
+        return None
+
+
+def _load_sample(path: str) -> dict:
+    p = Path(path)
+    if not p.exists():
+        log.error("Sample positions file missing at %s; returning empty payload", path)
+        return {"as_of": 0, "stale_seconds": 0, "source": "sample", "count": 0,
+                "aircraft": []}
+    with open(p, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    return data
