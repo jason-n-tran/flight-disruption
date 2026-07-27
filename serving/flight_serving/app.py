@@ -195,3 +195,28 @@ def airport(iata: str) -> dict:
         "historical": historical,
         "live_congestion": congestion,
     }
+
+
+@app.get("/api/reliability/route")
+def reliability_route(
+    origin: str = Query(..., min_length=3, max_length=4),
+    dest: str = Query(..., min_length=3, max_length=4),
+) -> dict:
+    _require_gold()
+    result = state.store.route_reliability(origin.upper(), dest.upper())
+    if result is None:
+        raise HTTPException(
+            status_code=404, detail=f"no reliability data for {origin}->{dest}"
+        )
+    return result
+
+
+# ---------------------------------------------------------------------------
+def _require_model() -> None:
+    if not state.model_loaded or state.artifacts is None:
+        raise HTTPException(status_code=503, detail="model not loaded")
+
+
+def _require_gold() -> None:
+    if not state.gold_loaded or state.store is None:
+        raise HTTPException(status_code=503, detail="gold data not loaded")
