@@ -128,3 +128,70 @@ def health() -> dict:
         "gold_loaded": state.gold_loaded,
         "data_version": state.settings.data_version if state.settings else "unknown",
     }
+
+
+@app.get("/api/meta/options")
+def meta_options() -> dict:
+    _require_gold()
+    return {
+        "airports": state.store.airports(),
+        "carriers": state.store.carriers(),
+        "example_presets": state.store.example_presets(),
+    }
+
+
+@app.post("/api/predict")
+def api_predict(req: PredictRequest) -> dict:
+    _require_model()
+    _require_gold()
+    origin, dest, carrier = req.origin.upper(), req.dest.upper(), req.carrier.upper()
+    try:
+        return run_predict(
+            store=state.store,
+            artifacts=state.artifacts,
+            origin=origin,
+            dest=dest,
+            carrier=carrier,
+            date_str=req.date,
+            dep_hour=req.dep_hour,
+            data_version=state.settings.data_version,
+            weather_client=state.weather_client,
+            weather_enabled=state.settings.weather_enabled,
+            weather_timeout=state.settings.weather_timeout_seconds,
+        )
+    except ValueError as exc:
+        # e.g. bad date format
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@app.get("/api/live/positions")
+def live_positions() -> dict:
+    if state.live is None:
+        raise HTTPException(status_code=503, detail="live positions not initialized")
+    # Signal viewer activity so the streaming producer polls OpenSky (viewer-
+    # gated polling). Without this stamp the producer stays idle and the map
+    # only ever shows cached/sample data.
+    state.live.touch_viewer()
+    return state.live.get_positions()
+
+
+@app.get("/api/airport/{iata}")
+def airport(iata: str) -> dict:
+    _require_gold()
+    iata = iata.upper()
+    dim = state.store.airport_dim(iata)
+    if dim is None:
+        raise HTTPException(status_code=404, detail=f"unknown airport: {iata}")
+
+    historical = state.store.airport_historical(iata)
+    positions = state.live.get_positions() if state.live else {"aircraft": []}
+    congestion = airport_congestion(positions, dim["lat"], dim["lon"])
+
+    return {
+        "iata": dim["iata"],
+        "name": dim["name"],
+        "lat": dim["lat"],
+        "lon": dim["lon"],
+        "historical": historical,
+        "live_congestion": congestion,
+    }
