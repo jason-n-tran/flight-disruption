@@ -1,0 +1,141 @@
+/* ============================================================================
+   Flight Disruption Intelligence — "glass cockpit MFD" design system.
+
+   The palette is a CODIFIED avionics language, not decoration:
+     magenta = navigation/course target (the signature)
+     green / amber / red = engaged / caution / warning  (== the risk bands)
+     cyan = live data, demoted to a secondary role
+   Type: Saira Semi Condensed (instrument headings), IBM Plex Mono (all data),
+   IBM Plex Sans (prose + controls).
+   ============================================================================ */
+
+:root {
+  /* substrate + structure */
+  --substrate: #0a0e13; /* matte instrument dark */
+  --bezel: #05070a; /* instrument frame, darkest */
+  --panel: #11171f; /* raised readout panel */
+  --panel-2: #161e29; /* inset well */
+  --line: #223040; /* hairline grid / dividers */
+  --line-soft: #1a2533;
+
+  /* text */
+  --text: #dde6f0;
+  --muted: #7d8ea3;
+  --faint: #54627a;
+
+  /* codified status (== risk bands) */
+  --nav: #ff5ad0; /* navigation magenta — the signature accent */
+  --nav-dim: #b53c92;
+  --ok: #2fe6a4; /* low / engaged / nominal */
+  --caution: #ffb12e; /* moderate */
+  --warn: #ff5247; /* high / warning */
+  --info: #4fd4ff; /* live data, secondary */
+
+  color-scheme: dark;
+
+  --r-sharp: 2px;
+  --r: 4px;
+  --r-lg: 6px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  min-height: 100%;
+}
+
+body {
+  background:
+    /* faint scanline texture, like a backlit LCD */
+    repeating-linear-gradient(
+      0deg,
+      rgba(255, 255, 255, 0.012) 0px,
+      rgba(255, 255, 255, 0.012) 1px,
+      transparent 1px,
+      transparent 3px
+    ),
+    radial-gradient(1100px 520px at 78% -8%, #14202e 0%, transparent 62%),
+    var(--bezel);
+  color: var(--text);
+  font-family: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  line-height: 1.45;
+}
+
+/* Headings carry the instrument-panel voice. */
+h1,
+h2,
+h3,
+h4 {
+  font-family: 'Saira Semi Condensed', 'IBM Plex Sans', sans-serif;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  margin: 0;
+}
+
+/* Data — codes, readouts, numbers — is always mono. */
+.mono,
+code,
+kbd {
+  font-family: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
+}
+
+/* Eyebrow / instrument label: the recurring small-caps tag. */
+.eyebrow {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+a {
+  color: var(--nav);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+button {
+  font-family: inherit;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 0;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--nav-dim);
+}
+::-webkit-scrollbar-track {
+  background: var(--bezel);
+}
+
+:focus-visible {
+  outline: 2px solid var(--nav);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: var(--nav);
+  color: #0a0e13;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
