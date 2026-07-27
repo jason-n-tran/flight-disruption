@@ -1,0 +1,9 @@
+node_modules
+build
+.svelte-kit
+.git
+.env.local
+.env.*.local
+Dockerfile
+.dockerignore
+README.md

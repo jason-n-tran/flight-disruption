@@ -1,0 +1,12 @@
+node_modules
+/build
+/.svelte-kit
+/package
+# .env is committed with NON-SECRET public defaults (PUBLIC_API_BASE etc).
+# Real overrides go in .env.local / the Cloudflare dashboard / Docker build-args.
+.env.local
+.env.*.local
+.DS_Store
+*.local
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
