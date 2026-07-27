@@ -179,3 +179,40 @@ def build_feature_dict(
         "forecast_available": weather_ok,
     }
     return feature_dict, weather_summary, weather_ok
+
+
+def predict(
+    *,
+    store: GoldStore,
+    artifacts: Artifacts,
+    origin: str,
+    dest: str,
+    carrier: str,
+    date_str: str,
+    dep_hour: int,
+    data_version: str,
+    weather_client=None,
+    weather_enabled: bool = True,
+    weather_timeout: float = 4.0,
+) -> dict:
+    """Full /api/predict path: assemble features, score, shape the response."""
+    feature_dict, weather_summary, _ = build_feature_dict(
+        store=store,
+        artifacts=artifacts,
+        origin=origin,
+        dest=dest,
+        carrier=carrier,
+        date_str=date_str,
+        dep_hour=dep_hour,
+        weather_client=weather_client,
+        weather_enabled=weather_enabled,
+        weather_timeout=weather_timeout,
+    )
+
+    # The canonical scoring function (calibrated proba + risk_band + baseline +
+    # beats_baseline + signed SHAP top_factors).
+    result = predict_proba_one(artifacts, feature_dict, k_factors=3, with_factors=True)
+
+    result["weather_summary"] = weather_summary
+    result["data_version"] = data_version
+    return result
