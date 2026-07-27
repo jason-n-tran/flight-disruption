@@ -1,0 +1,25 @@
+{
+  "name": "flight-disruption-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite dev",
+    "build": "vite build",
+    "preview": "vite preview",
+    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json"
+  },
+  "devDependencies": {
+    "@sveltejs/adapter-static": "^3.0.6",
+    "@sveltejs/kit": "^2.8.1",
+    "@sveltejs/vite-plugin-svelte": "^4.0.0",
+    "@types/node": "^20.19.43",
+    "svelte": "^5.1.16",
+    "svelte-check": "^4.0.5",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11"
+  },
+  "dependencies": {
+    "maplibre-gl": "^4.7.1"
+  }
+}
