@@ -63,3 +63,43 @@ export function options(): MetaOptions {
     ]
   };
 }
+
+// Cheap deterministic hash so identical inputs give identical predictions.
+function hash(s: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0) / 0xffffffff;
+}
+
+export function predict(body: PredictRequest): PredictResponse {
+  const seed = hash(`${body.origin}-${body.dest}-${body.carrier}-${body.dep_hour}`);
+  // Rush-hour and a touch of randomness drive the probability.
+  const rush = body.dep_hour >= 16 && body.dep_hour <= 20 ? 0.12 : 0;
+  const p = Math.min(0.92, Math.max(0.05, 0.18 + seed * 0.4 + rush));
+  const baseline = Math.max(0.05, p - 0.06 - seed * 0.05);
+  const gust = 18 + seed * 30;
+  return {
+    delay_probability: round(p),
+    risk_band: riskBandFor(p),
+    baseline_probability: round(baseline),
+    beats_baseline: p < baseline,
+    calibrated: true,
+    top_factors: [
+      { feature: 'origin_wind_gusts', value: round(gust, 1), contribution: round(0.04 + seed * 0.06), direction: 'increases' },
+      { feature: 'dep_hour', value: body.dep_hour, contribution: round(rush > 0 ? 0.05 : 0.01), direction: 'increases' },
+      { feature: 'route_hist_delay_rate', value: round(baseline), contribution: round(0.02 + seed * 0.03), direction: 'increases' },
+      { feature: 'carrier_hist_delay_rate', value: round(0.12 + seed * 0.1), contribution: round(-(0.02 + seed * 0.03)), direction: 'decreases' },
+      { feature: 'origin_precip_mm', value: round(seed * 3, 1), contribution: round(-(0.01 + seed * 0.02)), direction: 'decreases' }
+    ],
+    weather_summary: {
+      origin: { temp_c: Math.round(12 + seed * 18), precip_mm: round(seed * 3, 1), wind_gusts: round(gust, 1) },
+      dest: { temp_c: Math.round(10 + (1 - seed) * 16), precip_mm: round((1 - seed) * 2.5, 1), wind_gusts: round(15 + (1 - seed) * 20, 1) }
+    },
+    data_version: DATA_VERSION
+  };
+}
+
+let mockTick = 0;
