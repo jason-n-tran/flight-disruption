@@ -1,0 +1,54 @@
+# Lightweight containerized Airflow standalone for the showcase.
+#
+# Deliberately minimal: a SINGLE airflow container running `airflow standalone`
+# (webserver + scheduler + LocalExecutor) backed by SQLite -- NO Celery, NO
+# redis, NO separate postgres. This is enough to read, trigger, and screenshot
+# the DAGs for the portfolio. For real concurrency, swap to the official
+# docker-compose with postgres + LocalExecutor.
+#
+# Usage:
+#   cp .env.example .env
+#   docker compose -f docker-compose.airflow.yml up
+#   open http://localhost:8080   (login printed in the logs: admin / <generated>)
+#
+# The whole monorepo is mounted at /opt/flight so the orchestrated component
+# CLIs (flight_ingest, flight_lakehouse, flight_ml, dbt) are importable. They
+# must be installed into this image/env to actually run -- see README.
+
+services:
+  airflow:
+    image: apache/airflow:2.10.4-python3.12
+    container_name: flight-airflow
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # SequentialExecutor is the ONLY executor allowed with SQLite — Airflow
+      # hard-refuses LocalExecutor on SQLite ("cannot use SQLite with the
+      # LocalExecutor") because parallel task subprocesses can't share a SQLite
+      # write lock. Sequential is fine for a single-node screenshot showcase
+      # (DAGs still parse, render, run, and go green — just one task at a time).
+      AIRFLOW__CORE__EXECUTOR: ${AIRFLOW__CORE__EXECUTOR:-SequentialExecutor}
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: sqlite:////opt/airflow/airflow.db
+      PYTHONPATH: /opt/flight/shared:/opt/airflow/dags
+      PYTHONIOENCODING: utf-8
+    ports:
+      - "8080:8080"
+    volumes:
+      # DAGs + the publish script
+      - ./dags:/opt/airflow/dags
+      - ./scripts:/opt/airflow/scripts
+      # the rest of the monorepo (components + data lake) at the env anchor
+      - ../:/opt/flight
+      # persist Airflow metadata DB + logs across restarts
+      - airflow_home:/opt/airflow
+    command: >
+      bash -c "
+      pip install --no-cache-dir boto3 &&
+      airflow standalone
+      "
+
+volumes:
+  airflow_home:
