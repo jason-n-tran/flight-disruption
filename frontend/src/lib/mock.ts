@@ -103,3 +103,82 @@ export function predict(body: PredictRequest): PredictResponse {
 }
 
 let mockTick = 0;
+export function livePositions(): LivePositions {
+  mockTick++;
+  const count = 480;
+  const aircraft = [];
+  for (let i = 0; i < count; i++) {
+    const r = hash(`ac-${i}`);
+    const r2 = hash(`ac2-${i}`);
+    // Drift longitude slowly each poll so the map visibly updates.
+    const drift = ((mockTick * (0.01 + r * 0.02)) % 1) * 0.6;
+    aircraft.push({
+      icao24: (0x100000 + i).toString(16),
+      callsign: ['UAL', 'AAL', 'DAL', 'SWA', 'JBU'][i % 5] + (1000 + Math.floor(r2 * 8005)),
+      lat: round(25 + r * 23, 4),
+      lon: round(-123 + r2 * 56 + drift, 4),
+      altitude: round(1500 + r * 11000, 1),
+      velocity: round(120 + r2 * 130, 1),
+      heading: round((r * 360 + mockTick * 3) % 360, 1),
+      on_ground: r < 0.06
+    });
+  }
+  return {
+    as_of: Math.floor(Date.now() / 1000),
+    stale_seconds: Math.floor(hash(`stale-${mockTick}`) * 20),
+    source: 'sample',
+    count,
+    aircraft
+  };
+}
+
+export function airport(iata: string): AirportDetail {
+  const meta = MOCK_AIRPORTS.find((a) => a.iata === iata) ?? MOCK_AIRPORTS[0];
+  const seed = hash(iata);
+  const by_hour = Array.from({ length: 24 }, (_, h) => {
+    const peak = h >= 16 && h <= 20 ? 0.12 : h <= 5 ? -0.05 : 0;
+    return { hour: h, delay_rate: round(Math.max(0.03, 0.14 + seed * 0.1 + peak + Math.sin(h) * 0.02)) };
+  });
+  const dests = MOCK_AIRPORTS.filter((a) => a.iata !== iata).slice(0, 5);
+  const worst_routes = dests
+    .map((d) => ({ dest: d.iata, delay_rate: round(0.2 + hash(iata + d.iata) * 0.25) }))
+    .sort((a, b) => b.delay_rate - a.delay_rate)
+    .slice(0, 4);
+  const nearby = Math.round(8 + seed * 60);
+  return {
+    iata: meta.iata,
+    name: meta.name,
+    lat: meta.lat,
+    lon: meta.lon,
+    historical: {
+      overall_delay_rate: round(0.16 + seed * 0.12),
+      by_hour,
+      worst_routes
+    },
+    live_congestion: {
+      aircraft_nearby: nearby,
+      level: nearby > 45 ? 'high' : nearby > 22 ? 'moderate' : 'low'
+    }
+  };
+}
+
+export function routeReliability(origin: string, dest: string): RouteReliability {
+  const seed = hash(origin + dest);
+  const rate = round(0.16 + seed * 0.22);
+  return {
+    origin,
+    dest,
+    delay_rate: rate,
+    flights: Math.round(4000 + seed * 18005),
+    avg_delay_min: round(9 + seed * 22, 1),
+    by_carrier: MOCK_CARRIERS.slice(0, 4).map((c) => ({
+      carrier: c.code,
+      delay_rate: round(Math.max(0.05, rate + (hash(origin + dest + c.code) - 0.5) * 0.12))
+    }))
+  };
+}
+
+function round(n: number, dp = 2): number {
+  const f = 10 ** dp;
+  return Math.round(n * f) / f;
+}
