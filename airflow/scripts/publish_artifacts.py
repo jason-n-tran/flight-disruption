@@ -81,3 +81,70 @@ def ensure_bucket_exists(client, bucket: str) -> None:
             log(f"created bucket {bucket}")
         except Exception as create_err:
             log(f"WARN could not create bucket (may already exist): {create_err}")
+
+
+def upload(pairs: list[tuple[Path, str]]) -> None:
+    import boto3  # imported lazily: only needed when actually uploading
+    from botocore.exceptions import ClientError
+
+    bucket = os.environ["S3_BUCKET"]
+    prefix = os.environ.get("S3_PREFIX", "artifacts/latest").rstrip("/")
+    client = boto3.client(
+        "s3",
+        endpoint_url=os.environ["S3_ENDPOINT"],
+        aws_access_key_id=os.environ["S3_ACCESS_KEY_ID"],
+        aws_secret_access_key=os.environ.get("S3_SECRET_ACCESS_KEY", ""),
+        region_name=os.environ.get("S3_REGION", "us-east-1"),
+    )
+    
+    # Ensure bucket exists before uploading
+    ensure_bucket_exists(client, bucket)
+    
+    for local, base in pairs:
+        key = f"{prefix}/{base}"
+        log(f"PUT s3://{bucket}/{key}  ({local.stat().st_size} bytes)")
+        client.upload_file(str(local), bucket, key)
+    log(f"uploaded {len(pairs)} object(s) to s3://{bucket}/{prefix}")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(description="Publish model + gold artifacts to object storage.")
+    p.add_argument(
+        "--artifacts",
+        default=os.environ.get("ARTIFACTS_DIR", "ml/artifacts"),
+        help="Directory holding model.lgb / calibrator.pkl / feature_metadata.json.",
+    )
+    p.add_argument(
+        "--duckdb",
+        default=os.environ.get("DUCKDB_PATH", "data/lake/gold.duckdb"),
+        help="Path to the gold.duckdb to publish.",
+    )
+    return p
+
+
+def main(argv: list[str] | None = None) -> int:
+    os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+    args = build_parser().parse_args(argv)
+    artifacts_dir = Path(args.artifacts)
+    duckdb_path = Path(args.duckdb)
+
+    pairs = collect_files(artifacts_dir, duckdb_path)
+    log(f"candidate files: {[b for _, b in pairs]}")
+
+    if not s3_enabled():
+        log(
+            "S3_* env not set -> no-op (artifacts remain on disk). "
+            "This is expected for the showcase / local runs."
+        )
+        return 0
+
+    if not pairs:
+        log("ERROR: S3 configured but no artifacts found to upload.")
+        return 1
+
+    upload(pairs)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
