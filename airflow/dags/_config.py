@@ -90,3 +90,47 @@ def _env_prefix() -> str:
         f'export LAKE_ROOT="{_LAKE}" && '
         f'export DUCKDB_PATH="{_DUCKDB}"'
     )
+
+
+def ingest_cmd(target: str, years: str | None = None) -> str:
+    """target in {airports, bts, weather, all}. `years` may be a literal or a
+    Jinja expression; defaults to the flight_train_years Variable."""
+    yr = ""
+    if target in {"bts", "weather", "all"}:
+        yr = f' --years "{years if years is not None else _YEARS}"'
+    return (
+        f'{_env_prefix()} && cd "{_INGESTION}" && '
+        f'"{_PY}" -m flight_ingest.cli {target}{yr}'
+    )
+
+
+def lakehouse_cmd(stage: str) -> str:
+    """stage in {silver, gold, duckdb, all}."""
+    return (
+        f'{_env_prefix()} && cd "{_LAKEHOUSE}" && '
+        f'"{_PY}" -m flight_lakehouse.run --stage {stage}'
+    )
+
+
+def dbt_cmd(action: str) -> str:
+    """action in {run, test, ...}."""
+    return (
+        f'{_env_prefix()} && export DBT_PROFILES_DIR="{_DBT}" && '
+        f'cd "{_DBT}" && "{_PY}" -m dbt.cli.main {action}'
+    )
+
+
+def ml_train_cmd(extra: str = "") -> str:
+    return (
+        f'{_env_prefix()} && cd "{_ML}" && '
+        f'"{_PY}" -m flight_ml.pipeline --data "{_DUCKDB}" '
+        f'--out "{_ML_ARTIFACTS}"{(" " + extra) if extra else ""}'
+    )
+
+
+def publish_cmd() -> str:
+    return (
+        f'{_env_prefix()} && export ARTIFACTS_DIR="{_ML_ARTIFACTS}" && '
+        f'cd "{_REPO}" && "{_PY}" "{_PUBLISH}" '
+        f'--artifacts "{_ML_ARTIFACTS}" --duckdb "{_DUCKDB}"'
+    )
